@@ -1,0 +1,4 @@
+name = "ulsan-soccer-reservation-checker"
+main = "cloudflare-worker.js"
+compatibility_date = "2026-06-19"
+workers_dev = true
