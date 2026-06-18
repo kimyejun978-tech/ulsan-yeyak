@@ -1,0 +1,88 @@
+# 울산 축구장 예약/가능 시간 체크 (PWA + API)
+
+울산공공시설예약 사이트에 등록된 축구장만 모아서 특정 날짜의 예약/가능 시간을 빠르게 확인하는 PWA입니다.
+
+## 주요 기능
+
+- 축구장 전용 목록: 시설 목록에서 축구/풋살/인조잔디 관련 시설만 표시
+- 즐겨찾기: 자주 쓰는 운동장을 브라우저에 저장
+- 주변 추천: 지역, 날짜, 시작 시간, 이용 시간을 고르면 예약 없는 순으로 축구장 추천
+- 달천운동장 호환: 기존 `/api/dalcheon/soccer` 엔드포인트 유지
+
+## 구성
+
+- `apps/api`: 울산공공시설예약 AJAX 응답을 JSON API로 정리
+- `apps/web`: React PWA — 축구장 선택, 즐겨찾기, 날짜 이동, 주변 추천
+
+## 로컬 실행
+
+### 1) 의존성 설치
+
+```bash
+npm i
+```
+
+### 2) 실행
+
+터미널 2개에서:
+
+```bash
+cd apps/api
+npm run dev
+```
+
+```bash
+cd apps/web
+npm run dev
+```
+
+- Web: http://localhost:5173
+- API: http://localhost:8787/health
+
+## API
+
+### 축구장 목록
+
+```http
+GET /api/ulsan/facilities
+```
+
+울산공공시설예약 체육시설 목록에서 축구장 후보만 필터링해 반환합니다. 원본 목록 조회가 실패하면 달천운동장 기본값으로 동작합니다.
+
+### 선택 축구장 시간 조회
+
+```http
+GET /api/ulsan/sports?facilityId=T0000037&date=YYYY-MM-DD
+```
+
+- `facilityId`: 울산공공시설예약의 `item_id`
+- `date`: 생략 시 오늘
+
+### 주변 축구장 추천
+
+```http
+GET /api/ulsan/soccer/recommendations?area=북구&date=YYYY-MM-DD&start=19:00&hours=2
+```
+
+선택 지역과 인접 지역의 축구장을 조회한 뒤, 설정한 시간대에 예약이 없는 곳을 먼저 보여줍니다.
+
+### 기존 달천 전용 엔드포인트
+
+```http
+GET /api/dalcheon/soccer?date=YYYY-MM-DD
+```
+
+기존 앱/북마크 호환을 위해 유지합니다.
+
+## 환경변수
+
+- `PORT` (default `8787`)
+- `HOST` (default `0.0.0.0`)
+- `CACHE_TTL_MS` (default `300000`)
+- `FACILITY_CACHE_TTL_MS` (default `21600000`)
+- `CORS=1` 로컬에서 Vite와 API를 따로 띄울 때 사용
+- `UBIMC_REJECT_UNAUTHORIZED=1` 원본 사이트 TLS 인증서를 엄격하게 검증
+
+## 참고
+
+원본 예약 사이트의 시설 목록 HTML 구조가 바뀌면 자동 탐색이 제한될 수 있습니다. 이 경우 `apps/api/src/dalcheon.js`의 `SEEDED_FACILITIES`에 자주 쓰는 축구장의 `item_id`를 추가하면 선택 목록과 추천 목록에 노출됩니다.

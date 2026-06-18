@@ -1,0 +1,21 @@
+{
+  "name": "@ulsan/api",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "build": "node -c src/server.js",
+    "lint": "echo 'no lint yet'",
+    "format": "echo 'no format yet'"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/static": "^9.0.0",
+    "date-holidays": "^3.26.8",
+    "fastify": "^5.7.4",
+    "pino-pretty": "^13.1.3"
+  }
+}

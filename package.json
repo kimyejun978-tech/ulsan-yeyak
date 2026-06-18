@@ -1,0 +1,16 @@
+{
+  "name": "ulsan-reservation-checker",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @ulsan/api & npm run dev -w @ulsan/web",
+    "build": "npm run build -w @ulsan/api && npm run build -w @ulsan/web",
+    "start": "npm run build -w @ulsan/web && npm run start -w @ulsan/api",
+    "lint": "npm run lint -ws",
+    "format": "npm run format -ws"
+  }
+}
