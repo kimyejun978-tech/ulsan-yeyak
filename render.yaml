@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ulsan-soccer-reservation-checker
+    env: node
+    plan: free
+    buildCommand: ""
+    startCommand: "node deploy-server.mjs"
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: CACHE_TTL_MS
+        value: "300000"
+      - key: FACILITY_CACHE_TTL_MS
+        value: "21600000"

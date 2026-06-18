@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "npm run dev -w @ulsan/api & npm run dev -w @ulsan/web",
     "build": "npm run build -w @ulsan/api && npm run build -w @ulsan/web",
-    "start": "npm run build -w @ulsan/web && npm run start -w @ulsan/api",
+    "start": "node deploy-server.mjs",
+    "start:workspace": "npm run build -w @ulsan/web && npm run start -w @ulsan/api",
     "lint": "npm run lint -ws",
     "format": "npm run format -ws"
   }

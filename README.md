@@ -16,6 +16,14 @@
 
 ## 로컬 실행
 
+### 가장 쉬운 실행(배포용 단일 서버)
+
+```bash
+node deploy-server.mjs
+```
+
+- Web/API: http://localhost:8787
+
 ### 1) 의존성 설치
 
 ```bash
@@ -38,6 +46,29 @@ npm run dev
 
 - Web: http://localhost:5173
 - API: http://localhost:8787/health
+
+## 배포
+
+이 프로젝트는 `deploy-server.mjs` 하나로 웹 화면과 API를 같이 제공합니다. 따라서 정적 호스팅만 쓰는 Cloudflare Pages보다, Node 서버를 실행할 수 있는 Render/Railway/Fly.io/Oracle VM 같은 배포처가 실사용에 적합합니다.
+
+### Render
+
+1. 이 폴더를 GitHub 저장소에 push
+2. Render에서 New → Blueprint 선택
+3. 저장소를 연결하면 `render.yaml` 기준으로 자동 배포
+
+직접 Web Service로 만들 때는 다음 값만 지정하면 됩니다.
+
+- Build Command: 비워두기
+- Start Command: `node deploy-server.mjs`
+- Health Check Path: `/health`
+
+### Docker 지원
+
+```bash
+docker build -t ulsan-soccer-reservation-checker .
+docker run -p 8787:8787 ulsan-soccer-reservation-checker
+```
 
 ## API
 
