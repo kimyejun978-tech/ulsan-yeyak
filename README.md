@@ -49,9 +49,19 @@ npm run dev
 
 ## 배포
 
-이 프로젝트는 `deploy-server.mjs` 하나로 웹 화면과 API를 같이 제공합니다. 따라서 정적 호스팅만 쓰는 Cloudflare Pages보다, Node 서버를 실행할 수 있는 Render/Railway/Fly.io/Oracle VM 같은 배포처가 실사용에 적합합니다.
+이 프로젝트는 Cloudflare Workers 무료 플랜에 올릴 수 있는 `cloudflare-worker.js`를 포함합니다. Workers는 웹 화면과 API를 같은 무료 서버리스 엔드포인트에서 처리하므로 이 앱에 가장 적합합니다.
+
+### Cloudflare Workers
+
+```bash
+npx wrangler deploy
+```
+
+대시보드에서 직접 만들 때는 Worker 이름을 `ulsan-soccer-reservation-checker`로 만들고, `cloudflare-worker.js` 내용을 붙여넣어 배포하면 됩니다.
 
 ### Render
+
+Node 서버 방식이 필요하면 Render도 사용할 수 있습니다.
 
 1. 이 폴더를 GitHub 저장소에 push
 2. Render에서 New → Blueprint 선택
