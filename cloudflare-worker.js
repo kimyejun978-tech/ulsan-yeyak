@@ -1,6 +1,7 @@
 const BASE = 'https://crs.ubimc.or.kr';
 const AJAX = BASE + '/yeyak/ajxAgent/ajxRsvExplodTime';
 const DEFAULT_FACILITY = 'T0000037';
+const DEFAULT_AREA = '북구';
 
 const FACILITIES = [
   ['T0000064', '효문운동장 인조잔디축구장', '효문운동장', '인조잔디축구장', '북구', 'B0001023'],
@@ -49,6 +50,7 @@ async function route(request) {
       source: 'official-static',
       sourceUrl: BASE + '/yeyak/sports_facilities/facility_list?ITEM_TYPE=I&selItemKind=',
       filter: 'soccer-only',
+      scope: '울산 북구',
       updatedAt: new Date().toISOString()
     });
   }
@@ -64,13 +66,25 @@ async function route(request) {
     return json(await getSlots(date, facilityId));
   }
 
+  if (url.pathname === '/api/ulsan/soccer/overview') {
+    const date = normalizeDate(url.searchParams.get('date'));
+    if (!date) {
+      return json({ error: 'BadRequest', message: 'date must be YYYY-MM-DD' }, 400);
+    }
+    return json(await getOverview({
+      area: url.searchParams.get('area') || DEFAULT_AREA,
+      date,
+      duration: Number(url.searchParams.get('hours') || 2)
+    }));
+  }
+
   if (url.pathname === '/api/ulsan/soccer/recommendations') {
     const date = normalizeDate(url.searchParams.get('date'));
     if (!date) {
       return json({ error: 'BadRequest', message: 'date must be YYYY-MM-DD' }, 400);
     }
     return json(await getRecommendations({
-      area: url.searchParams.get('area') || '북구',
+      area: url.searchParams.get('area') || DEFAULT_AREA,
       date,
       start: url.searchParams.get('start') || '19:00',
       hours: Number(url.searchParams.get('hours') || 2)
@@ -138,7 +152,7 @@ function buildSlots(bookedHours) {
       start: pad(hour) + ':00',
       end: pad(hour + 1) + ':00',
       status: booked ? 'BOOKED' : 'AVAILABLE',
-      label: booked ? '예약 불가' : '예약 가능'
+      label: booked ? '예약됨' : '예약 가능'
     });
   }
   return slots;
@@ -190,6 +204,128 @@ function requestedHours(start, count) {
   return Array.from({ length }, (_, index) => firstHour + index).filter((hour) => hour <= 23);
 }
 
+function availableWindows(slots, duration) {
+  const windows = [];
+  const count = Math.max(1, Math.min(4, Number(duration) || 2));
+  for (let index = 0; index <= slots.length - count; index += 1) {
+    const candidate = slots.slice(index, index + count);
+    const allAvailable = candidate.length === count
+      && candidate.every((slot) => slot.status === 'AVAILABLE')
+      && candidate.every((slot, slotIndex) => slotIndex === 0 || slot.start === candidate[slotIndex - 1].end);
+    if (allAvailable) {
+      windows.push({
+        start: candidate[0].start,
+        end: candidate[candidate.length - 1].end,
+        hours: count,
+        label: candidate[0].start + '~' + candidate[candidate.length - 1].end
+      });
+    }
+  }
+  return windows;
+}
+
+function analyzeSlots(data, duration) {
+  const windows = availableWindows(data.slots, duration);
+  const firstAvailable = data.slots.find((slot) => slot.status === 'AVAILABLE') || null;
+  const bookedRate = data.rawRowCount ? Math.round((data.bookedHoursCount / data.rawRowCount) * 100) : 0;
+  const reasons = [];
+
+  if (windows.length) {
+    reasons.push(duration + '시간 연속 이용이 가능해요.');
+    reasons.push('예약 가능한 시간 묶음이 ' + windows.length + '개 있어요.');
+  } else if (firstAvailable) {
+    reasons.push('짧은 빈 시간은 있지만 ' + duration + '시간 연속은 없어요.');
+  } else {
+    reasons.push('선택한 날짜에는 빈 시간이 없어요.');
+  }
+
+  return {
+    facility: data.facilityInfo,
+    date: data.date,
+    sourceUrl: data.sourceUrl,
+    slots: data.slots,
+    timeline: data.slots.map((slot) => ({
+      hour: slot.hour,
+      start: slot.start,
+      end: slot.end,
+      status: slot.status,
+      label: slot.label
+    })),
+    windows,
+    firstAvailable,
+    availableHoursCount: data.availableHoursCount || 0,
+    bookedHoursCount: data.bookedHoursCount || 0,
+    bookedRate,
+    isAvailableForDuration: windows.length > 0,
+    reasons,
+    error: data.error || null,
+    updatedAt: data.updatedAt
+  };
+}
+
+function compareAnalyzed(a, b) {
+  return (a.error ? 1 : 0) - (b.error ? 1 : 0)
+    || Number(b.isAvailableForDuration) - Number(a.isAvailableForDuration)
+    || (a.windows[0]?.start || '99:99').localeCompare(b.windows[0]?.start || '99:99')
+    || b.windows.length - a.windows.length
+    || b.availableHoursCount - a.availableHoursCount
+    || a.facility.name.localeCompare(b.facility.name, 'ko-KR');
+}
+
+async function getOverview({ area, date, duration }) {
+  const safeDuration = Math.max(1, Math.min(4, Number(duration) || 2));
+  const candidates = FACILITIES.filter((facility) => !area || facility.area === area);
+  const results = [];
+
+  for (const facility of candidates) {
+    try {
+      const data = await getSlots(date, facility.id);
+      results.push(analyzeSlots(data, safeDuration));
+    } catch (error) {
+      results.push({
+        facility,
+        date,
+        sourceUrl: facility.sourceUrl,
+        slots: [],
+        timeline: [],
+        windows: [],
+        firstAvailable: null,
+        availableHoursCount: 0,
+        bookedHoursCount: 0,
+        bookedRate: 0,
+        isAvailableForDuration: false,
+        reasons: ['공식 사이트 응답이 지연됐어요.'],
+        error: error.message,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  results.sort(compareAnalyzed);
+  const availableResults = results.filter((result) => result.isAvailableForDuration);
+  const earliest = results
+    .filter((result) => result.firstAvailable)
+    .sort((a, b) => a.firstAvailable.start.localeCompare(b.firstAvailable.start))[0] || null;
+
+  return {
+    scope: '울산 북구',
+    area,
+    date,
+    duration: safeDuration,
+    facilitiesChecked: results.length,
+    availableFacilitiesCount: availableResults.length,
+    earliest: earliest ? {
+      facility: earliest.facility,
+      start: earliest.firstAvailable.start,
+      end: earliest.firstAvailable.end,
+      sourceUrl: earliest.sourceUrl
+    } : null,
+    recommended: availableResults[0] || null,
+    results,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 async function getRecommendations({ area, date, start, hours }) {
   const targetHours = requestedHours(start, hours);
   const candidates = FACILITIES.filter((facility) => !area || facility.area === area);
@@ -235,8 +371,8 @@ async function getRecommendations({ area, date, start, hours }) {
 
   results.sort((a, b) => {
     return (a.error ? 1 : 0) - (b.error ? 1 : 0)
-      || a.bookedSlots - b.bookedSlots
       || Number(b.isFullyAvailable) - Number(a.isFullyAvailable)
+      || a.bookedSlots - b.bookedSlots
       || b.availableSlots - a.availableSlots
       || a.facility.name.localeCompare(b.facility.name, 'ko-KR');
   });
@@ -279,472 +415,546 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>울산 축구장 예약 현황</title>
+<title>울산 북구 축구장 빈 시간 찾기</title>
 <style>
 :root {
-  --bg: #f4f7fb;
+  --bg: #f5f7fb;
+  --ink: #172033;
+  --muted: #64748b;
   --panel: #ffffff;
-  --panel-soft: #f9fbff;
-  --text: #172033;
-  --muted: #66758a;
+  --soft: #f9fbff;
   --line: #d8e1ee;
   --blue: #2563eb;
   --blue-soft: #eaf1ff;
-  --green: #12805c;
-  --green-soft: #e9f8f1;
+  --green: #11845b;
+  --green-soft: #e7f7ef;
   --red: #b4232b;
   --red-soft: #fff0f0;
   --amber: #8a5a00;
   --amber-soft: #fff6dc;
-  --shadow: 0 14px 36px rgba(31, 45, 68, .08);
+  --shadow: 0 14px 34px rgba(20, 32, 54, .08);
 }
 * { box-sizing: border-box; }
-html { color-scheme: light; }
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
-a { color: inherit; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3, p { margin: 0; }
 .shell {
   width: min(1180px, calc(100% - 28px));
   margin: 0 auto;
-  padding: 22px 0 38px;
+  padding: 22px 0 96px;
 }
-.topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
-  margin-bottom: 16px;
+  align-items: start;
+  margin-bottom: 12px;
 }
 .eyebrow {
-  margin: 0 0 4px;
   color: var(--blue);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 850;
+  margin-bottom: 5px;
 }
-h1, h2, h3, p { margin: 0; }
-h1 { font-size: 28px; line-height: 1.18; letter-spacing: 0; }
-h2 { font-size: 18px; line-height: 1.35; letter-spacing: 0; }
-h3 { font-size: 16px; line-height: 1.35; letter-spacing: 0; }
-.top-actions, .datebar, .quickbar, .chipbar, .row-actions {
+h1 {
+  font-size: 30px;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+.subtitle {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.5;
+}
+.actions, .segmented, .date-pills, .card-actions, .favorite-strip {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
-.layout {
-  display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
+.actions {
+  justify-content: flex-end;
 }
-.workspace {
-  display: grid;
-  gap: 14px;
+.last-check {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  width: 100%;
+  text-align: right;
 }
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
-}
-.panel.pad { padding: 16px; }
-.panel-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.muted { color: var(--muted); font-size: 13px; font-weight: 700; }
-.control, .button, .icon-button {
-  min-height: 42px;
-  border: 1px solid #b8c4d6;
+.button, .chip, .control, .icon-button {
+  min-height: 44px;
+  border: 1px solid #b7c3d6;
   border-radius: 8px;
   background: #fff;
-  color: var(--text);
-  font-weight: 800;
-  padding: 0 12px;
+  color: var(--ink);
+  font-weight: 850;
+  padding: 0 13px;
 }
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  text-decoration: none;
 }
 .button.primary {
-  color: #fff;
   background: var(--blue);
   border-color: var(--blue);
+  color: #fff;
 }
-.button.ghost { background: var(--panel-soft); }
-.icon-button {
-  width: 44px;
-  padding: 0;
-  font-size: 22px;
-  line-height: 1;
+.button.success {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
 }
-.icon-button.active, .chip.active, .button.active {
-  border-color: #e3bd52;
-  background: var(--amber-soft);
-  color: var(--amber);
+.button.ghost, .chip {
+  background: var(--soft);
 }
-.searchbox {
-  width: 100%;
-  margin-bottom: 10px;
-}
-.chipbar {
-  min-height: 38px;
-  margin-bottom: 10px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-.chip {
-  min-height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--text);
-  padding: 0 12px;
-  font-size: 13px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-.empty-chip {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-}
-.facility-list {
-  display: grid;
-  gap: 8px;
-  max-height: 622px;
-  overflow: auto;
-  padding-right: 2px;
-}
-.facility-row, .recommend-row {
-  width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 70px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-  padding: 11px 12px;
-  color: inherit;
-  text-align: left;
-}
-.facility-row.is-selected {
+.chip.is-active, .button.is-active {
   border-color: var(--blue);
   background: var(--blue-soft);
+  color: #1746a2;
 }
-.facility-row strong, .recommend-row strong, .slot-row strong {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.facility-row small, .recommend-row small, .slot-row small {
-  display: block;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 750;
-}
-.favorite-mark { color: var(--amber); font-weight: 900; }
-.hero-panel {
-  padding: 18px;
-}
-.current-line {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: start;
-}
-.datebar { justify-content: flex-end; }
-.datebar .control { width: 156px; }
-.quickbar {
-  margin-top: 14px;
-}
-.quickbar .button {
-  flex: 1 1 112px;
+.icon-button {
+  min-width: 44px;
+  padding: 0 10px;
 }
 .notice {
-  margin-top: 12px;
+  border: 1px solid #ead28b;
   border-radius: 8px;
-  padding: 11px 12px;
   background: var(--amber-soft);
   color: #6f4a05;
+  padding: 11px 12px;
+  font-size: 13px;
   font-weight: 800;
+  line-height: 1.45;
+  margin-bottom: 12px;
 }
-.notice:empty { display: none; }
-.status-grid {
+.filters {
   display: grid;
-  grid-template-columns: 1.5fr repeat(3, minmax(120px, .55fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, .9fr);
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 12px;
 }
-.status-tile {
-  min-height: 96px;
-  background: var(--panel);
+.filter-block, .summary-card, .result-card, .detail, .empty-state {
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: var(--panel);
   box-shadow: var(--shadow);
+}
+.filter-block {
   padding: 14px;
 }
-.status-tile b {
+.filter-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.filter-title h2 {
+  font-size: 17px;
+  line-height: 1.35;
+}
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+.date-pills {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.date-pill {
+  min-height: 58px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 11px;
+}
+.date-pill span {
   display: block;
-  margin-top: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.segmented {
+  margin-top: 8px;
+}
+.segmented .chip {
+  flex: 1 1 76px;
+}
+.search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+.control {
+  width: 100%;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.summary-card {
+  padding: 15px;
+  min-height: 112px;
+}
+.summary-card strong {
+  display: block;
+  margin-top: 8px;
   font-size: 26px;
   line-height: 1.1;
 }
-.status-tile strong {
-  display: block;
-  margin-top: 7px;
-  font-size: 18px;
+.summary-card p {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
   line-height: 1.35;
 }
-.slot-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-.slot-panel {
-  padding: 16px;
-}
-.slot-panel.available { background: var(--green-soft); border-color: #b7e4cf; }
-.slot-panel.booked { background: var(--red-soft); border-color: #f0c2c6; }
-.slot-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-}
-.slot-row {
-  min-height: 58px;
-  border: 1px solid rgba(23, 32, 51, .12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .76);
-  padding: 10px 12px;
-}
-.empty-state {
-  border: 1px dashed #b9c6d8;
-  border-radius: 8px;
-  padding: 18px 14px;
-  color: var(--muted);
-  font-weight: 800;
-  background: rgba(255, 255, 255, .62);
-}
-.recommend-panel {
-  padding: 16px;
-}
-.recommend-controls {
-  display: grid;
-  grid-template-columns: 1fr 1.2fr 1fr .8fr auto;
-  gap: 8px;
-}
-.recommend-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-}
-.recommend-card {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+.section-head {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
-  padding: 10px;
+  gap: 12px;
+  margin: 14px 0 10px;
 }
-.rank {
-  width: 34px;
-  height: 34px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--blue-soft);
-  color: var(--blue);
-  font-weight: 900;
+.section-head h2 {
+  font-size: 19px;
+}
+.results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.result-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.result-card h3, .detail h2 {
+  font-size: 18px;
+  line-height: 1.35;
+  letter-spacing: 0;
 }
 .badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
+  min-height: 32px;
   border-radius: 999px;
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 11px;
+  font-size: 12px;
   font-weight: 900;
   white-space: nowrap;
 }
 .badge.good { background: var(--green-soft); color: var(--green); }
 .badge.warn { background: var(--amber-soft); color: var(--amber); }
 .badge.bad { background: var(--red-soft); color: var(--red); }
-.footer {
-  margin-top: 20px;
-  color: var(--muted);
-  text-align: center;
+.favorite-button {
+  min-height: 38px;
+  border: 1px solid #e3bd52;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--amber);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 900;
+  padding: 0 12px;
 }
-@media (max-width: 900px) {
-  .layout, .slot-grid, .current-line, .status-grid, .recommend-controls {
+.window-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.time-button {
+  min-height: 38px;
+  border: 1px solid #a9dac2;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 900;
+  padding: 0 12px;
+}
+.reason {
+  border-left: 3px solid var(--blue);
+  padding-left: 10px;
+  color: #38506f;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.45;
+}
+.timeline {
+  display: grid;
+  grid-template-columns: repeat(19, minmax(18px, 1fr));
+  gap: 3px;
+}
+.tick {
+  min-height: 42px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 850;
+}
+.tick.available {
+  border-color: #a9dac2;
+  background: var(--green-soft);
+  color: var(--green);
+}
+.tick.booked {
+  background: #edf1f6;
+  color: #64748b;
+}
+.legend {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.legend span::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  border-radius: 3px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  background: #edf1f6;
+}
+.legend .ok::before { background: var(--green-soft); border: 1px solid #a9dac2; }
+.legend .no::before { background: #edf1f6; border: 1px solid var(--line); }
+.detail {
+  margin-top: 14px;
+  padding: 16px;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+  align-items: start;
+}
+.detail-side {
+  display: grid;
+  gap: 8px;
+}
+.info-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 11px;
+  background: var(--soft);
+}
+.info-row strong {
+  display: block;
+  margin-top: 3px;
+}
+details {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+.empty-state {
+  padding: 24px 18px;
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.5;
+}
+.favorite-strip {
+  margin-bottom: 10px;
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  background: #172033;
+  color: #fff;
+  border-radius: 999px;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 850;
+  box-shadow: var(--shadow);
+  display: none;
+  z-index: 30;
+}
+.toast.show { display: block; }
+.mobile-cta {
+  display: none;
+}
+@media (max-width: 960px) {
+  .hero, .filters, .summary-grid, .detail-grid, .results {
     grid-template-columns: 1fr;
   }
-  .datebar { justify-content: stretch; }
-  .datebar .control, .datebar .button { flex: 1 1 auto; width: auto; }
-  .facility-list { max-height: 430px; }
-  .recommend-card { grid-template-columns: 38px minmax(0, 1fr); }
-  .recommend-card .badge { grid-column: 2; justify-self: start; }
+  .actions, .last-check { justify-content: flex-start; text-align: left; }
 }
-@media (max-width: 560px) {
-  .shell { width: min(100% - 20px, 1180px); padding-top: 14px; }
-  .topbar { align-items: stretch; flex-direction: column; }
-  .top-actions .button { flex: 1; }
-  h1 { font-size: 24px; }
-  .hero-panel, .panel.pad, .recommend-panel, .slot-panel { padding: 13px; }
+@media (max-width: 620px) {
+  .shell {
+    width: min(100% - 20px, 1180px);
+    padding-top: 14px;
+  }
+  h1 { font-size: 25px; }
+  .date-pills {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .search-row {
+    grid-template-columns: 1fr;
+  }
+  .timeline {
+    grid-template-columns: repeat(10, minmax(24px, 1fr));
+  }
+  .mobile-cta {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: block;
+    padding: 10px;
+    background: rgba(255, 255, 255, .96);
+    border-top: 1px solid var(--line);
+    z-index: 20;
+  }
+  .mobile-cta .button {
+    width: 100%;
+  }
 }
 </style>
 </head>
 <body>
 <div class="shell">
-  <header class="topbar">
+  <header class="hero">
     <div>
-      <p class="eyebrow">울산 공공체육시설</p>
-      <h1>축구장 예약 현황</h1>
+      <p class="eyebrow">울산 북구 공공체육시설</p>
+      <h1>울산 북구 축구장 빈 시간 찾기</h1>
+      <p class="subtitle">공식 예약 시스템 기준으로 빈 시간을 빠르게 확인하고, 실제 예약은 공식 사이트에서 진행하세요.</p>
     </div>
-    <div class="top-actions">
-      <button id="refresh" class="button ghost" type="button">새로고침</button>
-      <a id="officialLink" class="button" href="https://crs.ubimc.or.kr/yeyak" target="_blank" rel="noreferrer">공식 사이트</a>
+    <div class="actions">
+      <div id="lastChecked" class="last-check">마지막 확인: 아직 없음</div>
+      <button id="refreshButton" class="button ghost" type="button">새로고침</button>
+      <a class="button" href="https://crs.ubimc.or.kr/yeyak" target="_blank" rel="noreferrer">공식 사이트</a>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="panel pad">
-      <div class="panel-title">
-        <div>
-          <h2>운동장</h2>
-          <p id="facilityCount" class="muted">불러오는 중</p>
-        </div>
-        <button id="favoriteToggle" class="icon-button" type="button" aria-label="즐겨찾기">☆</button>
+  <div class="notice">이 페이지에서는 예약 현황만 확인할 수 있어요. 최종 예약 가능 여부와 예약 확정은 공식 예약 시스템에서 확인됩니다.</div>
+
+  <section class="filters" aria-label="검색 조건">
+    <div class="filter-block">
+      <div class="filter-title">
+        <h2>날짜</h2>
+        <div class="muted" id="selectedDateLabel"></div>
       </div>
-      <input id="facilitySearch" class="control searchbox" type="search" placeholder="운동장 이름 검색">
-      <div id="favoriteStrip" class="chipbar"></div>
-      <div id="facilityList" class="facility-list" role="listbox"></div>
-    </section>
-
-    <div class="workspace">
-      <section class="panel hero-panel">
-        <div class="current-line">
-          <div>
-            <p class="muted">선택한 운동장</p>
-            <h2 id="currentName">달천운동장 인조잔디축구장</h2>
-            <p id="currentMeta" class="muted">북구 · 인조잔디축구장</p>
-          </div>
-          <div class="datebar">
-            <button id="prevDate" class="icon-button" type="button" aria-label="이전 날짜">‹</button>
-            <input id="dateInput" class="control" type="date">
-            <button id="nextDate" class="icon-button" type="button" aria-label="다음 날짜">›</button>
-          </div>
-        </div>
-        <div class="quickbar">
-          <button class="button ghost" type="button" data-offset="0">오늘</button>
-          <button class="button ghost" type="button" data-offset="1">내일</button>
-          <button class="button ghost" type="button" data-weekday="6">이번 토요일</button>
-          <button class="button ghost" type="button" data-weekday="0">이번 일요일</button>
-        </div>
-        <div id="notice" class="notice"></div>
-      </section>
-
-      <section id="statusGrid" class="status-grid"></section>
-
-      <section class="slot-grid">
-        <section class="panel slot-panel available">
-          <h3>예약 가능한 시간</h3>
-          <div id="availableSlots" class="slot-list"></div>
-        </section>
-        <section class="panel slot-panel booked">
-          <h3>예약된 시간</h3>
-          <div id="bookedSlots" class="slot-list"></div>
-        </section>
-      </section>
-
-      <section class="panel recommend-panel">
-        <div class="panel-title">
-          <div>
-            <h2>주변 추천</h2>
-            <p class="muted">예약이 적은 운동장부터 정렬</p>
-          </div>
-        </div>
-        <div class="recommend-controls">
-          <select id="areaSelect" class="control" aria-label="지역"></select>
-          <input id="recommendDate" class="control" type="date" aria-label="추천 날짜">
-          <select id="startTime" class="control" aria-label="시작 시간"></select>
-          <select id="duration" class="control" aria-label="이용 시간">
-            <option value="1">1시간</option>
-            <option value="2" selected>2시간</option>
-            <option value="3">3시간</option>
-            <option value="4">4시간</option>
-          </select>
-          <button id="recommendButton" class="button primary" type="button">추천 보기</button>
-        </div>
-        <div id="recommendResults" class="recommend-list"></div>
-      </section>
+      <div id="datePills" class="date-pills"></div>
     </div>
-  </main>
+    <div class="filter-block">
+      <div class="filter-title">
+        <h2>이용 시간</h2>
+        <div class="muted">기본 2시간</div>
+      </div>
+      <div id="durationPills" class="segmented"></div>
+      <div class="search-row">
+        <input id="searchInput" class="control" type="search" placeholder="운동장 이름 검색 예: 달천, 농소, 화봉">
+        <button id="availableOnlyButton" class="button is-active" type="button">예약 가능만 보기</button>
+      </div>
+    </div>
+  </section>
 
-  <footer class="footer">공식 예약 시스템 기준 · 축구장만 표시</footer>
+  <section id="summaryGrid" class="summary-grid" aria-live="polite"></section>
+
+  <section id="favoritesSection"></section>
+
+  <div class="section-head">
+    <div>
+      <h2>추천 결과</h2>
+      <p class="muted">빈 시간이 많은 곳과 빠른 시간을 먼저 보여줘요.</p>
+    </div>
+    <select id="sortSelect" class="control" style="max-width:180px" aria-label="정렬 기준">
+      <option value="best">추천순</option>
+      <option value="early">가장 빠른 시간순</option>
+      <option value="many">빈 시간 많은 순</option>
+      <option value="name">이름순</option>
+    </select>
+  </div>
+  <section id="results" class="results" aria-live="polite"></section>
+
+  <section id="detail" class="detail"></section>
 </div>
+
+<div class="mobile-cta">
+  <a id="mobileOfficialLink" class="button success" href="https://crs.ubimc.or.kr/yeyak" target="_blank" rel="noreferrer">공식 사이트에서 예약하기</a>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
 var $ = function (id) { return document.getElementById(id); };
+var STATE_KEY = 'ulsan-soccer-state-v3';
 var FAVORITE_KEY = 'ulsan-soccer-favorites';
-var facilities = [];
-var selectedId = 'T0000037';
-var lastData = null;
-var favorites = readFavorites();
+var DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
+var overview = null;
+var favorites = readJson(FAVORITE_KEY, []);
+var state = Object.assign({
+  date: todayIso(),
+  duration: 2,
+  selectedId: 'T0000037',
+  availableOnly: true,
+  query: '',
+  sort: 'best'
+}, readJson(STATE_KEY, {}));
 
-function readFavorites() {
+function readJson(key, fallback) {
   try {
-    var saved = JSON.parse(localStorage.getItem(FAVORITE_KEY) || '[]');
-    return Array.isArray(saved) ? saved : [];
+    var value = JSON.parse(localStorage.getItem(key) || 'null');
+    return value == null ? fallback : value;
   } catch (error) {
-    return [];
+    return fallback;
   }
+}
+
+function saveState() {
+  localStorage.setItem(STATE_KEY, JSON.stringify(state));
 }
 
 function saveFavorites() {
   localStorage.setItem(FAVORITE_KEY, JSON.stringify(favorites));
 }
 
-function escapeHtml(value) {
-  return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
-    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char];
-  });
-}
-
 function todayIso() {
-  var today = new Date();
-  return toIso(today);
+  return toIso(new Date());
 }
 
 function toIso(date) {
   return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
 }
 
-function shiftDate(value, days) {
-  var date = new Date(value + 'T00:00:00');
-  date.setDate(date.getDate() + days);
-  return toIso(date);
+function addDays(date, days) {
+  var next = new Date(date + 'T00:00:00');
+  next.setDate(next.getDate() + days);
+  return toIso(next);
 }
 
 function nextWeekday(day) {
@@ -754,283 +964,308 @@ function nextWeekday(day) {
   return toIso(date);
 }
 
-function facilityName(facility) {
-  return facility ? facility.name : '달천운동장 인조잔디축구장';
+function dateLabel(date) {
+  var value = new Date(date + 'T00:00:00');
+  return value.getFullYear() + '년 ' + (value.getMonth() + 1) + '월 ' + value.getDate() + '일 ' + DAY_NAMES[value.getDay()] + '요일';
 }
 
-function facilityMeta(facility) {
-  if (!facility) return '북구 · 인조잔디축구장';
-  return facility.area + ' · ' + facility.itemName + ' · ' + facility.id;
+function shortDateLabel(date) {
+  var value = new Date(date + 'T00:00:00');
+  return (value.getMonth() + 1) + '/' + value.getDate() + ' ' + DAY_NAMES[value.getDay()];
 }
 
-function selectedFacility() {
-  return facilities.find(function (facility) { return facility.id === selectedId; }) || facilities[0] || null;
+function localTime(value) {
+  if (!value) return '아직 없음';
+  return new Date(value).toLocaleString('ko-KR', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function time(value) {
+  return String(value || '').slice(0, 5);
+}
+
+function rangeLabel(start, end) {
+  return time(start) + '~' + time(end);
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char];
+  });
 }
 
 function isFavorite(id) {
   return favorites.indexOf(id) !== -1;
 }
 
-function setNotice(message) {
-  $('notice').textContent = message || '';
+function showToast(message) {
+  var toast = $('toast');
+  toast.textContent = message;
+  toast.classList.add('show');
+  setTimeout(function () { toast.classList.remove('show'); }, 1800);
 }
 
-function formatTime(time) {
-  var hour = Number(String(time).slice(0, 2));
-  var minute = String(time).slice(3, 5);
-  var period = hour >= 12 ? '오후' : '오전';
-  hour = hour % 12;
-  if (!hour) hour = 12;
-  return period + ' ' + hour + ':' + minute;
+function setLoading(isLoading) {
+  $('refreshButton').textContent = isLoading ? '확인 중...' : '새로고침';
+  $('refreshButton').disabled = isLoading;
 }
 
-function groupSlots(slots, status) {
-  var groups = [];
-  var current = null;
-  (slots || []).forEach(function (slot) {
-    if (slot.status === status) {
-      if (!current) {
-        current = { start: slot.start, end: slot.end, count: 1 };
-      } else if (current.end === slot.start) {
-        current.end = slot.end;
-        current.count += 1;
-      } else {
-        groups.push(current);
-        current = { start: slot.start, end: slot.end, count: 1 };
-      }
-    } else if (current) {
-      groups.push(current);
-      current = null;
+function renderControls() {
+  $('selectedDateLabel').textContent = dateLabel(state.date);
+  $('searchInput').value = state.query;
+  $('availableOnlyButton').className = 'button' + (state.availableOnly ? ' is-active' : '');
+  $('sortSelect').value = state.sort;
+
+  var dateOptions = [
+    ['오늘', todayIso()],
+    ['내일', addDays(todayIso(), 1)],
+    ['토요일', nextWeekday(6)],
+    ['일요일', nextWeekday(0)]
+  ];
+  $('datePills').innerHTML = dateOptions.map(function (option) {
+    var active = option[1] === state.date ? ' is-active' : '';
+    return '<button class="button date-pill' + active + '" type="button" data-date="' + option[1] + '"><strong>' + option[0] + '</strong><span>' + shortDateLabel(option[1]) + '</span></button>';
+  }).join('');
+
+  $('durationPills').innerHTML = [1, 2, 3, 4].map(function (duration) {
+    return '<button class="chip' + (duration === Number(state.duration) ? ' is-active' : '') + '" type="button" data-duration="' + duration + '">' + duration + '시간</button>';
+  }).join('');
+}
+
+function renderLoading() {
+  $('summaryGrid').innerHTML = [1, 2, 3].map(function () {
+    return '<div class="summary-card"><span class="muted">확인 중</span><strong>...</strong><p>울산 북구 공공체육시설 예약 현황을 불러오는 중이에요.</p></div>';
+  }).join('');
+  $('results').innerHTML = '<div class="empty-state">운동장 카드와 시간표를 불러오는 중이에요.</div>';
+  $('detail').innerHTML = '';
+}
+
+async function loadOverview() {
+  renderControls();
+  renderLoading();
+  setLoading(true);
+  saveState();
+  try {
+    var params = new URLSearchParams({ date: state.date, hours: state.duration, area: '북구' });
+    var response = await fetch('/api/ulsan/soccer/overview?' + params.toString());
+    overview = await response.json();
+    if (!overview.results || overview.error) throw new Error(overview.message || '조회 실패');
+    if (!overview.results.some(function (result) { return result.facility.id === state.selectedId; })) {
+      state.selectedId = overview.recommended?.facility?.id || overview.results[0]?.facility?.id || state.selectedId;
     }
-  });
-  if (current) groups.push(current);
-  return groups;
+    $('lastChecked').textContent = '마지막 확인: ' + localTime(overview.updatedAt);
+    renderAll();
+  } catch (error) {
+    $('summaryGrid').innerHTML = '<div class="summary-card"><span class="muted">조회 실패</span><strong>연결 불안정</strong><p>공식 사이트 접속이 지연 중일 수 있어요. 1분 뒤 다시 시도해 주세요.</p></div>';
+    $('results').innerHTML = '<div class="empty-state">예약 정보를 불러오지 못했어요.<br><button class="button primary" type="button" onclick="loadOverview()">다시 시도</button> <a class="button" href="https://crs.ubimc.or.kr/yeyak" target="_blank" rel="noreferrer">공식 사이트 열기</a></div>';
+  } finally {
+    setLoading(false);
+  }
 }
 
-function renderFacilityList() {
-  var query = $('facilitySearch').value.trim().toLowerCase();
-  var current = selectedFacility();
-  var sorted = facilities.slice().sort(function (a, b) {
-    return (isFavorite(b.id) - isFavorite(a.id))
-      || facilityName(a).localeCompare(facilityName(b), 'ko-KR');
-  });
-  var visible = sorted.filter(function (facility) {
-    return (facilityName(facility) + ' ' + facilityMeta(facility)).toLowerCase().indexOf(query) !== -1;
-  });
-
-  $('facilityCount').textContent = visible.length + '개 운동장';
-  $('currentName').textContent = facilityName(current);
-  $('currentMeta').textContent = facilityMeta(current);
-  $('favoriteToggle').textContent = isFavorite(selectedId) ? '★' : '☆';
-  $('favoriteToggle').className = 'icon-button' + (isFavorite(selectedId) ? ' active' : '');
-  $('officialLink').href = current && current.sourceUrl ? current.sourceUrl : 'https://crs.ubimc.or.kr/yeyak';
-
-  var favoriteItems = favorites.map(function (id) {
-    return facilities.find(function (facility) { return facility.id === id; });
-  }).filter(Boolean);
-
-  $('favoriteStrip').innerHTML = favoriteItems.length
-    ? favoriteItems.map(function (facility) {
-      return '<button class="chip active" type="button" data-favorite-pick="' + facility.id + '">' + escapeHtml(facilityName(facility)) + '</button>';
-    }).join('')
-    : '<span class="empty-chip">즐겨찾기한 운동장이 없습니다</span>';
-
-  $('facilityList').innerHTML = visible.length
-    ? visible.map(function (facility) {
-      return '<button class="facility-row ' + (facility.id === selectedId ? 'is-selected' : '') + '" type="button" data-facility-id="' + facility.id + '">'
-        + '<span><strong>' + escapeHtml(facilityName(facility)) + '</strong><small>' + escapeHtml(facilityMeta(facility)) + '</small></span>'
-        + '<span class="favorite-mark">' + (isFavorite(facility.id) ? '★' : '') + '</span>'
-        + '</button>';
-    }).join('')
-    : '<div class="empty-state">검색 결과가 없습니다</div>';
+function renderAll() {
+  renderControls();
+  renderSummary();
+  renderFavorites();
+  renderResults();
+  renderDetail();
+  saveState();
 }
 
-function renderStatus(data) {
-  if (!data || data.error) {
-    var message = data && data.error ? data.error : '예약 정보를 불러오지 못했습니다.';
-    $('statusGrid').innerHTML = '<div class="status-tile"><span class="muted">조회 상태</span><strong>조회 불가</strong><p class="muted">' + escapeHtml(message) + '</p></div>';
-    $('availableSlots').innerHTML = '<div class="empty-state">표시할 시간이 없습니다</div>';
-    $('bookedSlots').innerHTML = '<div class="empty-state">표시할 시간이 없습니다</div>';
+function renderSummary() {
+  var earliest = overview.earliest;
+  var recommended = overview.recommended;
+  $('summaryGrid').innerHTML =
+    '<article class="summary-card"><span class="muted">' + shortDateLabel(overview.date) + ' 예약 가능</span><strong>' + overview.availableFacilitiesCount + '곳</strong><p>' + overview.facilitiesChecked + '개 운동장을 확인했어요.</p></article>'
+    + '<article class="summary-card"><span class="muted">가장 빠른 시간</span><strong>' + (earliest ? time(earliest.start) : '없음') + '</strong><p>' + (earliest ? escapeHtml(earliest.facility.name) : '선택한 날짜에는 빈 시간이 없어요.') + '</p></article>'
+    + '<article class="summary-card"><span class="muted">' + overview.duration + '시간 연속 가능</span><strong>' + (recommended ? '가능' : '없음') + '</strong><p>' + (recommended ? escapeHtml(recommended.facility.name + ' ' + rangeLabel(recommended.windows[0].start, recommended.windows[0].end)) : '이용 시간을 줄이거나 날짜를 바꿔보세요.') + '</p></article>';
+}
+
+function renderFavorites() {
+  var items = (overview?.results || []).filter(function (result) { return isFavorite(result.facility.id); });
+  if (!items.length) {
+    $('favoritesSection').innerHTML = '<div class="favorite-strip"><span class="muted">자주 보는 운동장을 즐겨찾기해두면 더 빨리 확인할 수 있어요.</span></div>';
+    return;
+  }
+  $('favoritesSection').innerHTML = '<div class="favorite-strip"><span class="muted">내 즐겨찾기 운동장</span>' + items.map(function (item) {
+    return '<button class="chip" type="button" data-pick="' + item.facility.id + '">' + escapeHtml(item.facility.place) + '</button>';
+  }).join('') + '</div>';
+}
+
+function sortedResults() {
+  var query = state.query.trim().toLowerCase();
+  var items = (overview?.results || []).filter(function (result) {
+    var haystack = (result.facility.name + ' ' + result.facility.place + ' ' + result.facility.itemName).toLowerCase();
+    if (query && haystack.indexOf(query) === -1) return false;
+    if (state.availableOnly && !result.isAvailableForDuration) return false;
+    return true;
+  });
+
+  items.sort(function (a, b) {
+    if (state.sort === 'name') return a.facility.name.localeCompare(b.facility.name, 'ko-KR');
+    if (state.sort === 'many') return b.windows.length - a.windows.length || b.availableHoursCount - a.availableHoursCount;
+    if (state.sort === 'early') return (a.windows[0]?.start || '99:99').localeCompare(b.windows[0]?.start || '99:99');
+    return Number(b.isAvailableForDuration) - Number(a.isAvailableForDuration)
+      || Number(isFavorite(b.facility.id)) - Number(isFavorite(a.facility.id))
+      || (a.windows[0]?.start || '99:99').localeCompare(b.windows[0]?.start || '99:99')
+      || b.windows.length - a.windows.length;
+  });
+  return items;
+}
+
+function renderResults() {
+  var items = sortedResults();
+  if (!items.length) {
+    $('results').innerHTML = '<div class="empty-state">조건에 맞는 빈 시간이 없어요.<br><button class="button" type="button" data-easy-duration>1시간으로 보기</button> <button class="button" type="button" data-tomorrow>내일 보기</button> <button class="button" type="button" data-show-all>예약 없는 곳도 보기</button></div>';
     return;
   }
 
-  var available = groupSlots(data.slots, 'AVAILABLE');
-  var booked = groupSlots(data.slots, 'BOOKED');
-  var firstAvailable = available.length ? formatTime(available[0].start) + '부터' : '없음';
-
-  $('statusGrid').innerHTML =
-    '<div class="status-tile"><span class="muted">오늘 볼 운동장</span><strong>' + escapeHtml(facilityName(data.facilityInfo)) + '</strong><p class="muted">' + escapeHtml(data.date) + '</p></div>'
-    + '<div class="status-tile"><span class="muted">빈 시간</span><b>' + data.availableHoursCount + '</b></div>'
-    + '<div class="status-tile"><span class="muted">예약됨</span><b>' + data.bookedHoursCount + '</b></div>'
-    + '<div class="status-tile"><span class="muted">가장 빠른 빈 시간</span><strong>' + escapeHtml(firstAvailable) + '</strong></div>';
-
-  $('availableSlots').innerHTML = renderSlotRows(available, '예약 가능');
-  $('bookedSlots').innerHTML = renderSlotRows(booked, '예약됨');
+  $('results').innerHTML = items.map(renderResultCard).join('');
 }
 
-function renderSlotRows(groups, label) {
-  if (!groups.length) {
-    return '<div class="empty-state">표시할 시간이 없습니다</div>';
-  }
-  return groups.map(function (group) {
-    return '<div class="slot-row"><strong>' + formatTime(group.start) + ' ~ ' + formatTime(group.end) + '</strong><small>' + group.count + '시간 · ' + label + '</small></div>';
-  }).join('');
+function renderResultCard(result) {
+  var windows = result.windows.slice(0, 4);
+  var badgeClass = result.error ? 'bad' : result.isAvailableForDuration ? 'good' : 'warn';
+  var badgeText = result.error ? '조회 불가' : result.isAvailableForDuration ? state.duration + '시간 연속 가능' : '연속 시간 없음';
+  var windowHtml = windows.length
+    ? windows.map(function (window) {
+      return '<button class="time-button" type="button" data-pick-window="' + result.facility.id + '" data-window="' + window.label + '">' + rangeLabel(window.start, window.end) + '</button>';
+    }).join('')
+    : '<span class="muted">선택한 조건에서는 가능한 시간이 없어요.</span>';
+
+  return '<article class="result-card" data-card="' + result.facility.id + '">'
+    + '<div class="card-top"><button class="favorite-button" type="button" aria-label="' + (isFavorite(result.facility.id) ? '즐겨찾기 해제' : '즐겨찾기 추가') + '" data-favorite="' + result.facility.id + '">' + (isFavorite(result.facility.id) ? '★ 즐겨찾기됨' : '☆ 즐겨찾기') + '</button><span class="badge ' + badgeClass + '">' + badgeText + '</span></div>'
+    + '<div><h3>' + escapeHtml(result.facility.name) + '</h3><p class="muted">' + escapeHtml(result.facility.area + ' · ' + result.facility.itemName) + '</p></div>'
+    + '<div class="window-list">' + windowHtml + '</div>'
+    + '<div class="reason">추천 이유: ' + escapeHtml(result.reasons.join(' ')) + '</div>'
+    + renderTimeline(result.timeline)
+    + '<div class="card-actions"><button class="button ghost" type="button" data-detail="' + result.facility.id + '">상세 보기</button><a class="button success" href="' + escapeHtml(result.sourceUrl) + '" target="_blank" rel="noreferrer">공식 예약</a><button class="button" type="button" data-share="' + result.facility.id + '">링크 복사</button></div>'
+    + '</article>';
 }
 
-function fillAreaOptions() {
-  var areas = facilities.reduce(function (list, facility) {
-    if (list.indexOf(facility.area) === -1) list.push(facility.area);
-    return list;
-  }, []);
-  $('areaSelect').innerHTML = areas.map(function (area) {
-    return '<option value="' + escapeHtml(area) + '">' + escapeHtml(area) + '</option>';
-  }).join('');
+function renderTimeline(timeline) {
+  if (!timeline.length) return '<div class="empty-state">시간표를 불러오지 못했어요.</div>';
+  return '<div><div class="timeline" aria-label="시간대별 예약 가능 여부">' + timeline.map(function (slot) {
+    var cls = slot.status === 'AVAILABLE' ? 'available' : 'booked';
+    var label = slot.status === 'AVAILABLE' ? '가능' : '예약';
+    return '<span class="tick ' + cls + '" title="' + time(slot.start) + ' ' + label + '">' + slot.hour + '</span>';
+  }).join('') + '</div><div class="legend"><span class="ok">예약 가능</span><span class="no">이미 예약됨</span></div></div>';
 }
 
-function fillStartOptions() {
-  var duration = Number($('duration').value || 2);
-  var max = 24 - duration;
-  var selected = $('startTime').value || '19:00';
-  var html = '';
-  for (var hour = 5; hour <= max; hour += 1) {
-    var value = String(hour).padStart(2, '0') + ':00';
-    html += '<option value="' + value + '">' + formatTime(value) + '</option>';
-  }
-  $('startTime').innerHTML = html;
-  $('startTime').value = selected <= String(max).padStart(2, '0') + ':00' ? selected : '19:00';
+function selectedResult() {
+  return (overview?.results || []).find(function (result) { return result.facility.id === state.selectedId; })
+    || overview?.recommended
+    || overview?.results?.[0]
+    || null;
 }
 
-async function loadFacilities() {
-  var response = await fetch('/api/ulsan/facilities');
-  var payload = await response.json();
-  facilities = payload.facilities || [];
-  fillAreaOptions();
-  renderFacilityList();
-}
-
-async function loadSlots() {
-  var date = $('dateInput').value;
-  $('recommendDate').value = date;
-  setNotice('예약 정보를 불러오는 중입니다.');
-  try {
-    var query = new URLSearchParams({ date: date, facilityId: selectedId });
-    var response = await fetch('/api/ulsan/sports?' + query.toString());
-    lastData = await response.json();
-    setNotice('');
-    renderFacilityList();
-    renderStatus(lastData);
-  } catch (error) {
-    setNotice('');
-    renderStatus({ error: error.message });
-  }
-}
-
-async function loadRecommendations() {
-  var params = new URLSearchParams({
-    area: $('areaSelect').value,
-    date: $('recommendDate').value,
-    start: $('startTime').value,
-    hours: $('duration').value
-  });
-
-  $('recommendResults').innerHTML = '<div class="empty-state">추천을 조회하는 중입니다</div>';
-  try {
-    var response = await fetch('/api/ulsan/soccer/recommendations?' + params.toString());
-    var payload = await response.json();
-    renderRecommendations(payload.results || []);
-  } catch (error) {
-    $('recommendResults').innerHTML = '<div class="empty-state">추천을 불러오지 못했습니다</div>';
-  }
-}
-
-function renderRecommendations(results) {
-  if (!results.length) {
-    $('recommendResults').innerHTML = '<div class="empty-state">추천할 운동장이 없습니다</div>';
+function renderDetail() {
+  var result = selectedResult();
+  if (!result) {
+    $('detail').innerHTML = '';
     return;
   }
+  state.selectedId = result.facility.id;
+  $('mobileOfficialLink').href = result.sourceUrl;
 
-  $('recommendResults').innerHTML = results.map(function (result, index) {
-    var stateClass = result.error ? 'bad' : result.isFullyAvailable ? 'good' : 'warn';
-    var stateText = result.error ? '조회 불가' : result.isFullyAvailable ? '전부 가능' : result.bookedSlots + '시간 예약됨';
-    return '<article class="recommend-card">'
-      + '<span class="rank">' + (index + 1) + '</span>'
-      + '<button class="recommend-row" type="button" data-recommend-pick="' + result.facility.id + '">'
-      + '<span><strong>' + escapeHtml(facilityName(result.facility)) + '</strong><small>' + escapeHtml(facilityMeta(result.facility)) + ' · ' + result.availableSlots + '/' + result.requestedSlots + '시간 가능</small></span>'
-      + '<span class="favorite-mark">' + (isFavorite(result.facility.id) ? '★' : '') + '</span>'
-      + '</button>'
-      + '<span class="badge ' + stateClass + '">' + escapeHtml(stateText) + '</span>'
-      + '</article>';
-  }).join('');
+  var windows = result.windows.length
+    ? result.windows.map(function (window) {
+      return '<button class="time-button" type="button" data-pick-window="' + result.facility.id + '" data-window="' + window.label + '">' + rangeLabel(window.start, window.end) + ' 예약 가능</button>';
+    }).join('')
+    : '<div class="empty-state">이 날짜에는 ' + state.duration + '시간 연속 가능한 시간이 없어요.</div>';
+  var booked = result.slots.filter(function (slot) { return slot.status === 'BOOKED'; });
+
+  $('detail').innerHTML = '<div class="detail-grid">'
+    + '<div><p class="muted">현재 보고 있는 운동장</p><h2>' + escapeHtml(result.facility.name) + '</h2><p class="subtitle">' + escapeHtml(result.facility.area + ' · ' + result.facility.itemName) + '</p><div class="window-list" style="margin-top:12px">' + windows + '</div><div style="margin-top:12px">' + renderTimeline(result.timeline) + '</div><details><summary>이미 예약된 시간 보기</summary><div class="window-list" style="margin-top:10px">' + (booked.length ? booked.map(function (slot) { return '<span class="chip">' + rangeLabel(slot.start, slot.end) + '</span>'; }).join('') : '<span class="muted">예약된 시간이 없어요.</span>') + '</div></details></div>'
+    + '<aside class="detail-side"><div class="info-row"><span class="muted">운영 시간</span><strong>05:00~24:00</strong></div><div class="info-row"><span class="muted">예약 단위</span><strong>1시간 단위 조회</strong></div><div class="info-row"><span class="muted">조명 여부</span><strong>공식 페이지에서 확인</strong></div><a class="button success" href="' + escapeHtml(result.sourceUrl) + '" target="_blank" rel="noreferrer">공식 사이트에서 예약하기</a><p class="muted">최종 예약 가능 여부는 공식 사이트에서 확인됩니다.</p></aside>'
+    + '</div>';
 }
 
 function toggleFavorite(id) {
   if (isFavorite(id)) {
     favorites = favorites.filter(function (favoriteId) { return favoriteId !== id; });
+    showToast('즐겨찾기에서 제거했어요.');
   } else {
     favorites = [id].concat(favorites.filter(function (favoriteId) { return favoriteId !== id; }));
+    showToast('즐겨찾기에 추가했어요.');
   }
   saveFavorites();
-  renderFacilityList();
-  if (lastData) renderStatus(lastData);
+  renderAll();
 }
 
-function bindEvents() {
-  $('facilitySearch').addEventListener('input', renderFacilityList);
-  $('favoriteToggle').addEventListener('click', function () { toggleFavorite(selectedId); });
-  $('facilityList').addEventListener('click', function (event) {
-    var button = event.target.closest('[data-facility-id]');
-    if (!button) return;
-    selectedId = button.dataset.facilityId;
-    $('facilitySearch').value = '';
-    loadSlots();
-  });
-  $('favoriteStrip').addEventListener('click', function (event) {
-    var button = event.target.closest('[data-favorite-pick]');
-    if (!button) return;
-    selectedId = button.dataset.favoritePick;
-    loadSlots();
-  });
-  $('dateInput').addEventListener('change', loadSlots);
-  $('prevDate').addEventListener('click', function () {
-    $('dateInput').value = shiftDate($('dateInput').value, -1);
-    loadSlots();
-  });
-  $('nextDate').addEventListener('click', function () {
-    $('dateInput').value = shiftDate($('dateInput').value, 1);
-    loadSlots();
-  });
-  $('refresh').addEventListener('click', loadSlots);
-  document.querySelectorAll('[data-offset]').forEach(function (button) {
-    button.addEventListener('click', function () {
-      var date = new Date();
-      date.setDate(date.getDate() + Number(button.dataset.offset));
-      $('dateInput').value = toIso(date);
-      loadSlots();
-    });
-  });
-  document.querySelectorAll('[data-weekday]').forEach(function (button) {
-    button.addEventListener('click', function () {
-      $('dateInput').value = nextWeekday(Number(button.dataset.weekday));
-      loadSlots();
-    });
-  });
-  $('duration').addEventListener('change', fillStartOptions);
-  $('recommendButton').addEventListener('click', loadRecommendations);
-  $('recommendResults').addEventListener('click', function (event) {
-    var pick = event.target.closest('[data-recommend-pick]');
-    if (!pick) return;
-    selectedId = pick.dataset.recommendPick;
-    $('dateInput').value = $('recommendDate').value;
-    loadSlots();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  });
+function copyShare(id, windowLabel) {
+  var result = (overview?.results || []).find(function (item) { return item.facility.id === id; });
+  if (!result) return;
+  var text = result.facility.name + ' ' + shortDateLabel(state.date) + ' ' + (windowLabel || (result.windows[0] ? result.windows[0].label : '예약 현황')) + ' 확인: ' + location.href;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(function () { showToast('링크를 복사했어요.'); });
+  } else {
+    showToast('복사 기능을 사용할 수 없어요.');
+  }
 }
 
-$('dateInput').value = todayIso();
-$('recommendDate').value = $('dateInput').value;
-fillStartOptions();
-bindEvents();
-loadFacilities().then(loadSlots);
+document.addEventListener('click', function (event) {
+  var dateButton = event.target.closest('[data-date]');
+  var durationButton = event.target.closest('[data-duration]');
+  var favoriteButton = event.target.closest('[data-favorite]');
+  var detailButton = event.target.closest('[data-detail]');
+  var pickButton = event.target.closest('[data-pick]');
+  var windowButton = event.target.closest('[data-pick-window]');
+  var shareButton = event.target.closest('[data-share]');
+
+  if (dateButton) {
+    state.date = dateButton.dataset.date;
+    loadOverview();
+  } else if (durationButton) {
+    state.duration = Number(durationButton.dataset.duration);
+    loadOverview();
+  } else if (favoriteButton) {
+    toggleFavorite(favoriteButton.dataset.favorite);
+  } else if (detailButton) {
+    state.selectedId = detailButton.dataset.detail;
+    renderAll();
+    $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else if (pickButton) {
+    state.selectedId = pickButton.dataset.pick;
+    renderAll();
+  } else if (windowButton) {
+    state.selectedId = windowButton.dataset.pickWindow;
+    renderAll();
+    copyShare(windowButton.dataset.pickWindow, windowButton.dataset.window);
+  } else if (shareButton) {
+    copyShare(shareButton.dataset.share);
+  } else if (event.target.closest('[data-easy-duration]')) {
+    state.duration = 1;
+    loadOverview();
+  } else if (event.target.closest('[data-tomorrow]')) {
+    state.date = addDays(state.date, 1);
+    loadOverview();
+  } else if (event.target.closest('[data-show-all]')) {
+    state.availableOnly = false;
+    renderAll();
+  }
+});
+
+$('refreshButton').addEventListener('click', loadOverview);
+$('availableOnlyButton').addEventListener('click', function () {
+  state.availableOnly = !state.availableOnly;
+  renderAll();
+});
+$('searchInput').addEventListener('input', function (event) {
+  state.query = event.target.value;
+  renderAll();
+});
+$('sortSelect').addEventListener('change', function (event) {
+  state.sort = event.target.value;
+  renderAll();
+});
+
+renderControls();
+loadOverview();
 </script>
 </body>
 </html>`;
