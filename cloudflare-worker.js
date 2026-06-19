@@ -435,13 +435,15 @@ const HTML = `<!doctype html>
   --shadow: 0 14px 34px rgba(20, 32, 54, .08);
 }
 * { box-sizing: border-box; }
+html { overflow-x: hidden; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-x: hidden;
 }
-button, input, select { font: inherit; }
+button, input, select { font: inherit; min-width: 0; }
 button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 h1, h2, h3, p { margin: 0; }
@@ -467,6 +469,7 @@ h1 {
   font-size: 30px;
   line-height: 1.18;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 .subtitle {
   margin-top: 8px;
@@ -474,6 +477,7 @@ h1 {
   font-size: 15px;
   font-weight: 720;
   line-height: 1.5;
+  max-width: 760px;
 }
 .actions, .segmented, .date-pills, .card-actions, .favorite-strip {
   display: flex;
@@ -492,6 +496,7 @@ h1 {
   text-align: right;
 }
 .button, .chip, .control, .icon-button {
+  min-width: 0;
   min-height: 44px;
   border: 1px solid #b7c3d6;
   border-radius: 8px;
@@ -561,6 +566,7 @@ h1 {
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+  min-width: 0;
 }
 .filter-title h2 {
   font-size: 17px;
@@ -588,10 +594,13 @@ h1 {
   color: var(--muted);
 }
 .segmented {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 8px;
 }
 .segmented .chip {
-  flex: 1 1 76px;
+  width: 100%;
+  padding: 0 8px;
 }
 .search-row {
   display: grid;
@@ -650,6 +659,7 @@ h1 {
   justify-content: space-between;
   align-items: flex-start;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .result-card h3, .detail h2 {
   font-size: 18px;
@@ -816,18 +826,59 @@ summary {
 }
 @media (max-width: 620px) {
   .shell {
-    width: min(100% - 20px, 1180px);
-    padding-top: 14px;
+    width: 100%;
+    padding: 14px 10px 108px;
   }
-  h1 { font-size: 25px; }
+  .hero { gap: 10px; }
+  h1 { font-size: 24px; }
+  .subtitle { font-size: 14px; }
+  .actions { width: 100%; }
+  .actions .button {
+    flex: 1 1 calc(50% - 4px);
+    padding: 0 10px;
+  }
+  .filter-block {
+    padding: 12px;
+  }
+  .filter-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .filter-title .muted {
+    text-align: left;
+  }
   .date-pills {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .segmented {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .segmented .chip {
+    padding: 0 4px;
   }
   .search-row {
     grid-template-columns: 1fr;
   }
+  .summary-card {
+    min-height: auto;
+  }
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .section-head .control {
+    max-width: none !important;
+  }
+  .card-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .card-actions .button {
+    width: 100%;
+  }
   .timeline {
-    grid-template-columns: repeat(10, minmax(24px, 1fr));
+    grid-template-columns: repeat(10, minmax(0, 1fr));
   }
   .mobile-cta {
     position: fixed;
@@ -878,7 +929,7 @@ summary {
       </div>
       <div id="durationPills" class="segmented"></div>
       <div class="search-row">
-        <input id="searchInput" class="control" type="search" placeholder="운동장 이름 검색 예: 달천, 농소, 화봉">
+        <input id="searchInput" class="control" type="search" placeholder="운동장 검색: 달천, 농소, 화봉">
         <button id="availableOnlyButton" class="button is-active" type="button">예약 가능만 보기</button>
       </div>
     </div>
@@ -964,6 +1015,14 @@ function nextWeekday(day) {
   return toIso(date);
 }
 
+function relativeDateLabel(offset, date) {
+  if (offset === 0) return '오늘';
+  if (offset === 1) return '내일';
+  if (offset === 2) return '모레';
+  var value = new Date(date + 'T00:00:00');
+  return DAY_NAMES[value.getDay()] + '요일';
+}
+
 function dateLabel(date) {
   var value = new Date(date + 'T00:00:00');
   return value.getFullYear() + '년 ' + (value.getMonth() + 1) + '월 ' + value.getDate() + '일 ' + DAY_NAMES[value.getDay()] + '요일';
@@ -1020,12 +1079,10 @@ function renderControls() {
   $('availableOnlyButton').className = 'button' + (state.availableOnly ? ' is-active' : '');
   $('sortSelect').value = state.sort;
 
-  var dateOptions = [
-    ['오늘', todayIso()],
-    ['내일', addDays(todayIso(), 1)],
-    ['토요일', nextWeekday(6)],
-    ['일요일', nextWeekday(0)]
-  ];
+  var dateOptions = [0, 1, 2, 3].map(function (offset) {
+    var date = addDays(todayIso(), offset);
+    return [relativeDateLabel(offset, date), date];
+  });
   $('datePills').innerHTML = dateOptions.map(function (option) {
     var active = option[1] === state.date ? ' is-active' : '';
     return '<button class="button date-pill' + active + '" type="button" data-date="' + option[1] + '"><strong>' + option[0] + '</strong><span>' + shortDateLabel(option[1]) + '</span></button>';
