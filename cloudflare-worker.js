@@ -1,9 +1,20 @@
 const BASE = 'https://crs.ubimc.or.kr';
 const AJAX = BASE + '/yeyak/ajxAgent/ajxRsvExplodTime';
 const DEFAULT_FACILITY = 'T0000037';
-const DEFAULT_AREA = '북구';
+const DEFAULT_AREA = '울산 전체';
+const ALL_AREAS = ['울산 전체', '중구', '남구', '동구', '북구', '울주군'];
+const REALTIME_SOURCE = 'ubimc';
+const OFFICIAL_SOURCE = 'official-link';
+const ULSAN_FACILITY_SOURCE = 'https://www.uic.or.kr/';
+const AREA_OFFICIAL_URLS = {
+  중구: 'https://www.junggu.ulsan.kr/',
+  남구: 'https://www.ulsannamgu.go.kr/',
+  동구: 'https://www.donggu.ulsan.kr/',
+  북구: BASE + '/yeyak',
+  울주군: 'https://www.ulju.ulsan.kr/'
+};
 
-const FACILITIES = [
+const BUKGU_REALTIME_FACILITIES = [
   ['T0000064', '효문운동장 인조잔디축구장', '효문운동장', '인조잔디축구장', '북구', 'B0001023'],
   ['T0000037', '달천운동장 인조잔디축구장', '달천운동장', '인조잔디축구장', '북구', 'B0001016'],
   ['T0000046', '염포운동장 인조잔디축구장', '염포운동장', '인조잔디축구장', '북구', 'B0001018'],
@@ -27,8 +38,44 @@ const FACILITIES = [
   area,
   itemType: 'I',
   memId,
+  provider: REALTIME_SOURCE,
+  availabilityMode: 'realtime',
+  realtime: true,
   sourceUrl: viewUrl(id, memId)
 }));
+
+const OFFICIAL_CHECK_FACILITIES = [
+  ['official-junggu-stadium-sub', '울산종합운동장 보조경기장', '울산종합운동장', '보조경기장', '중구', ULSAN_FACILITY_SOURCE],
+  ['official-junggu-simni', '십리대밭축구장', '십리대밭축구장', '축구장', '중구', AREA_OFFICIAL_URLS.중구],
+  ['official-junggu-seongan', '성안생활체육공원 축구장', '성안생활체육공원', '축구장', '중구', AREA_OFFICIAL_URLS.중구],
+  ['official-namgu-munsu-main', '문수축구경기장', '문수축구경기장', '축구경기장', '남구', ULSAN_FACILITY_SOURCE],
+  ['official-namgu-munsu-sub', '문수보조경기장', '문수보조경기장', '보조경기장', '남구', ULSAN_FACILITY_SOURCE],
+  ['official-namgu-munsu-futsal', '문수풋살경기장', '문수풋살경기장', '풋살경기장', '남구', ULSAN_FACILITY_SOURCE],
+  ['official-namgu-seonam', '선암호수공원 축구장', '선암호수공원', '축구장', '남구', AREA_OFFICIAL_URLS.남구],
+  ['official-donggu-seobu', '서부시민운동장 축구장', '서부시민운동장', '축구장', '동구', AREA_OFFICIAL_URLS.동구],
+  ['official-donggu-bangeojin', '방어진체육공원 축구장', '방어진체육공원', '축구장', '동구', AREA_OFFICIAL_URLS.동구],
+  ['official-ulju-ganjeolgot', '간절곶스포츠파크 축구장', '간절곶스포츠파크', '축구장', '울주군', AREA_OFFICIAL_URLS.울주군],
+  ['official-ulju-onsan', '온산운동장 축구장', '온산운동장', '축구장', '울주군', AREA_OFFICIAL_URLS.울주군],
+  ['official-ulju-beomseo', '범서생활체육공원 축구장', '범서생활체육공원', '축구장', '울주군', AREA_OFFICIAL_URLS.울주군],
+  ['official-ulju-ungchon', '웅촌운동장 축구장', '웅촌운동장', '축구장', '울주군', AREA_OFFICIAL_URLS.울주군],
+  ['official-ulju-samnam', '삼남읍민운동장 축구장', '삼남읍민운동장', '축구장', '울주군', AREA_OFFICIAL_URLS.울주군]
+].map(([id, name, place, itemName, area, sourceUrl]) => ({
+  id,
+  itemId: id,
+  name,
+  shortName: name,
+  place,
+  itemName,
+  area,
+  itemType: 'I',
+  memId: '',
+  provider: OFFICIAL_SOURCE,
+  availabilityMode: 'official-check',
+  realtime: false,
+  sourceUrl
+}));
+
+const FACILITIES = [...BUKGU_REALTIME_FACILITIES, ...OFFICIAL_CHECK_FACILITIES];
 
 addEventListener('fetch', (event) => {
   event.respondWith(route(event.request).catch((error) => {
@@ -46,11 +93,13 @@ async function route(request) {
   if (url.pathname === '/api/ulsan/facilities') {
     return json({
       facilities: FACILITIES,
-      areas: [...new Set(FACILITIES.map((facility) => facility.area))],
-      source: 'official-static',
+      areas: ALL_AREAS,
+      source: 'official-mixed',
       sourceUrl: BASE + '/yeyak/sports_facilities/facility_list?ITEM_TYPE=I&selItemKind=',
       filter: 'soccer-only',
-      scope: '울산 북구',
+      scope: '울산 전체',
+      realtimeScope: '북구',
+      officialCheckScope: '중구, 남구, 동구, 울주군',
       updatedAt: new Date().toISOString()
     });
   }
@@ -107,6 +156,16 @@ function findFacility(id) {
     || FACILITIES.find((facility) => facility.id === DEFAULT_FACILITY);
 }
 
+function normalizeArea(area) {
+  const value = String(area || '').trim();
+  if (!value || value === '전체' || value === DEFAULT_AREA) return '';
+  return ALL_AREAS.includes(value) ? value : '';
+}
+
+function isRealtimeFacility(facility) {
+  return facility?.provider === REALTIME_SOURCE || facility?.realtime === true;
+}
+
 function normalizeDate(value) {
   if (!value) {
     const today = new Date();
@@ -120,6 +179,10 @@ function pad(value) {
 }
 
 async function fetchReservationTime(date, facility) {
+  if (!isRealtimeFacility(facility)) {
+    throw new Error('이 운동장은 공식 사이트에서 직접 확인해야 합니다.');
+  }
+
   const body = new URLSearchParams({
     selDate: date.replaceAll('-', ''),
     item_id: facility.id
@@ -160,6 +223,24 @@ function buildSlots(bookedHours) {
 
 async function getSlots(date, id) {
   const facility = findFacility(id);
+  if (!isRealtimeFacility(facility)) {
+    return {
+      facility: facility.id,
+      facilityName: facility.name,
+      facilityInfo: facility,
+      date,
+      sourceUrl: facility.sourceUrl,
+      slots: [],
+      rawRowCount: 0,
+      holiday: { isHoliday: false, name: null, type: null },
+      bookedHoursCount: 0,
+      availableHoursCount: 0,
+      availabilityMode: 'official-check',
+      message: '이 운동장은 아직 실시간 예약 API가 연결되지 않았어요. 공식 예약 페이지에서 날짜와 시간을 확인해 주세요.',
+      updatedAt: new Date().toISOString()
+    };
+  }
+
   const raw = await fetchReservationTime(date, facility);
 
   if (raw.chk_result !== 'OK' && raw.chk_result !== 'NODATA') {
@@ -173,6 +254,7 @@ async function getSlots(date, id) {
       rawRowCount: 0,
       holiday: { isHoliday: false, name: null, type: null },
       error: raw.msg || '공식 예약 시스템에서 조회를 제한했습니다.',
+      availabilityMode: 'realtime',
       updatedAt: new Date().toISOString()
     };
   }
@@ -194,6 +276,7 @@ async function getSlots(date, id) {
     holiday: { isHoliday: false, name: null, type: null },
     bookedHoursCount: bookedHours.size,
     availableHoursCount: slots.filter((slot) => slot.status === 'AVAILABLE').length,
+    availabilityMode: 'realtime',
     updatedAt: new Date().toISOString()
   };
 }
@@ -225,6 +308,10 @@ function availableWindows(slots, duration) {
 }
 
 function analyzeSlots(data, duration) {
+  if (data.availabilityMode === 'official-check') {
+    return officialCheckResult(data.facilityInfo, data.date, duration);
+  }
+
   const windows = availableWindows(data.slots, duration);
   const firstAvailable = data.slots.find((slot) => slot.status === 'AVAILABLE') || null;
   const bookedRate = data.rawRowCount ? Math.round((data.bookedHoursCount / data.rawRowCount) * 100) : 0;
@@ -257,28 +344,67 @@ function analyzeSlots(data, duration) {
     bookedHoursCount: data.bookedHoursCount || 0,
     bookedRate,
     isAvailableForDuration: windows.length > 0,
+    availabilityMode: data.availabilityMode || 'realtime',
     reasons,
     error: data.error || null,
     updatedAt: data.updatedAt
   };
 }
 
+function officialCheckResult(facility, date, duration) {
+  return {
+    facility,
+    date,
+    sourceUrl: facility.sourceUrl,
+    slots: [],
+    timeline: [],
+    windows: [],
+    firstAvailable: null,
+    availableHoursCount: 0,
+    bookedHoursCount: 0,
+    bookedRate: 0,
+    isAvailableForDuration: false,
+    availabilityMode: 'official-check',
+    reasons: [
+      '공식 예약 페이지에서 날짜와 시간을 직접 확인해야 해요.',
+      '현재 실시간 시간표 연동은 북구 공공체육시설부터 지원합니다.'
+    ],
+    error: null,
+    message: duration + '시간 연속 가능 여부는 공식 사이트에서 최종 확인해 주세요.',
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function resultRank(result) {
+  if (result.availabilityMode === 'realtime' && result.isAvailableForDuration) return 0;
+  if (result.availabilityMode === 'official-check') return 1;
+  if (result.availabilityMode === 'realtime') return 2;
+  return 3;
+}
+
 function compareAnalyzed(a, b) {
-  return (a.error ? 1 : 0) - (b.error ? 1 : 0)
+  return resultRank(a) - resultRank(b)
+    || (a.error ? 1 : 0) - (b.error ? 1 : 0)
     || Number(b.isAvailableForDuration) - Number(a.isAvailableForDuration)
     || (a.windows[0]?.start || '99:99').localeCompare(b.windows[0]?.start || '99:99')
     || b.windows.length - a.windows.length
     || b.availableHoursCount - a.availableHoursCount
+    || a.facility.area.localeCompare(b.facility.area, 'ko-KR')
     || a.facility.name.localeCompare(b.facility.name, 'ko-KR');
 }
 
 async function getOverview({ area, date, duration }) {
   const safeDuration = Math.max(1, Math.min(4, Number(duration) || 2));
-  const candidates = FACILITIES.filter((facility) => !area || facility.area === area);
+  const selectedArea = normalizeArea(area);
+  const candidates = FACILITIES.filter((facility) => !selectedArea || facility.area === selectedArea);
   const results = [];
 
   for (const facility of candidates) {
     try {
+      if (!isRealtimeFacility(facility)) {
+        results.push(officialCheckResult(facility, date, safeDuration));
+        continue;
+      }
       const data = await getSlots(date, facility.id);
       results.push(analyzeSlots(data, safeDuration));
     } catch (error) {
@@ -294,6 +420,7 @@ async function getOverview({ area, date, duration }) {
         bookedHoursCount: 0,
         bookedRate: 0,
         isAvailableForDuration: false,
+        availabilityMode: isRealtimeFacility(facility) ? 'realtime' : 'official-check',
         reasons: ['공식 사이트 응답이 지연됐어요.'],
         error: error.message,
         updatedAt: new Date().toISOString()
@@ -303,16 +430,20 @@ async function getOverview({ area, date, duration }) {
 
   results.sort(compareAnalyzed);
   const availableResults = results.filter((result) => result.isAvailableForDuration);
+  const realtimeResults = results.filter((result) => result.availabilityMode === 'realtime');
+  const officialCheckResults = results.filter((result) => result.availabilityMode === 'official-check');
   const earliest = results
     .filter((result) => result.firstAvailable)
     .sort((a, b) => a.firstAvailable.start.localeCompare(b.firstAvailable.start))[0] || null;
 
   return {
-    scope: '울산 북구',
-    area,
+    scope: '울산 전체',
+    area: selectedArea || DEFAULT_AREA,
     date,
     duration: safeDuration,
     facilitiesChecked: results.length,
+    realtimeFacilitiesCount: realtimeResults.length,
+    officialCheckFacilitiesCount: officialCheckResults.length,
     availableFacilitiesCount: availableResults.length,
     earliest: earliest ? {
       facility: earliest.facility,
@@ -328,11 +459,32 @@ async function getOverview({ area, date, duration }) {
 
 async function getRecommendations({ area, date, start, hours }) {
   const targetHours = requestedHours(start, hours);
-  const candidates = FACILITIES.filter((facility) => !area || facility.area === area);
+  const selectedArea = normalizeArea(area);
+  const candidates = FACILITIES.filter((facility) => !selectedArea || facility.area === selectedArea);
   const results = [];
 
   for (const facility of candidates) {
     try {
+      if (!isRealtimeFacility(facility)) {
+        results.push({
+          facility,
+          date,
+          startTime: pad(targetHours[0]) + ':00',
+          hours: targetHours.length,
+          requestedHours: targetHours,
+          requestedSlots: 0,
+          availableSlots: 0,
+          bookedSlots: 0,
+          isFullyAvailable: false,
+          unavailableSlots: [],
+          sourceUrl: facility.sourceUrl,
+          availabilityMode: 'official-check',
+          message: '공식 예약 페이지에서 직접 확인이 필요해요.',
+          error: null
+        });
+        continue;
+      }
+
       const data = await getSlots(date, facility.id);
       const targetSlots = data.slots.filter((slot) => targetHours.includes(slot.hour));
       const bookedSlots = targetSlots.filter((slot) => slot.status === 'BOOKED');
@@ -349,6 +501,7 @@ async function getRecommendations({ area, date, start, hours }) {
         isFullyAvailable: targetSlots.length > 0 && bookedSlots.length === 0,
         unavailableSlots: bookedSlots.map((slot) => slot.start + '-' + slot.end),
         sourceUrl: facility.sourceUrl,
+        availabilityMode: 'realtime',
         error: data.error || null
       });
     } catch (error) {
@@ -364,26 +517,31 @@ async function getRecommendations({ area, date, start, hours }) {
         isFullyAvailable: false,
         unavailableSlots: [],
         sourceUrl: facility.sourceUrl,
+        availabilityMode: isRealtimeFacility(facility) ? 'realtime' : 'official-check',
         error: error.message
       });
     }
   }
 
   results.sort((a, b) => {
-    return (a.error ? 1 : 0) - (b.error ? 1 : 0)
+    return (a.availabilityMode === 'official-check' ? 1 : 0) - (b.availabilityMode === 'official-check' ? 1 : 0)
+      || (a.error ? 1 : 0) - (b.error ? 1 : 0)
       || Number(b.isFullyAvailable) - Number(a.isFullyAvailable)
       || a.bookedSlots - b.bookedSlots
       || b.availableSlots - a.availableSlots
+      || a.facility.area.localeCompare(b.facility.area, 'ko-KR')
       || a.facility.name.localeCompare(b.facility.name, 'ko-KR');
   });
 
   return {
-    area,
+    area: selectedArea || DEFAULT_AREA,
     date,
     startTime: pad(targetHours[0]) + ':00',
     hours: targetHours.length,
     requestedHours: targetHours,
     facilitiesChecked: results.length,
+    realtimeFacilitiesCount: results.filter((result) => result.availabilityMode === 'realtime').length,
+    officialCheckFacilitiesCount: results.filter((result) => result.availabilityMode === 'official-check').length,
     results,
     updatedAt: new Date().toISOString()
   };
@@ -415,7 +573,7 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>울산 북구 축구장 빈 시간 찾기</title>
+<title>울산 축구장 빈 시간 찾기</title>
 <style>
 :root {
   --bg: #f5f7fb;
@@ -479,7 +637,7 @@ h1 {
   line-height: 1.5;
   max-width: 760px;
 }
-.actions, .segmented, .date-pills, .card-actions, .favorite-strip {
+.actions, .segmented, .date-pills, .area-pills, .card-actions, .favorite-strip {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -546,7 +704,7 @@ h1 {
 }
 .filters {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(260px, .9fr);
+  grid-template-columns: minmax(220px, .7fr) minmax(0, 1.35fr) minmax(260px, .95fr);
   gap: 12px;
   align-items: stretch;
   margin-bottom: 12px;
@@ -580,6 +738,14 @@ h1 {
 .date-pills {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.area-pills {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.area-pills .chip {
+  width: 100%;
+  padding: 0 9px;
 }
 .date-pill {
   min-height: 58px;
@@ -651,8 +817,8 @@ h1 {
 }
 .result-card {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 16px;
 }
 .card-top {
   display: flex;
@@ -680,6 +846,7 @@ h1 {
 .badge.good { background: var(--green-soft); color: var(--green); }
 .badge.warn { background: var(--amber-soft); color: var(--amber); }
 .badge.bad { background: var(--red-soft); color: var(--red); }
+.badge.info { background: var(--blue-soft); color: #1746a2; }
 .favorite-button {
   min-height: 38px;
   border: 1px solid #e3bd52;
@@ -695,15 +862,46 @@ h1 {
   flex-wrap: wrap;
   gap: 8px;
 }
+.window-list.compact {
+  gap: 7px;
+}
 .time-button {
-  min-height: 38px;
+  min-height: 36px;
   border: 1px solid #a9dac2;
   border-radius: 999px;
   background: var(--green-soft);
   color: var(--green);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
-  padding: 0 12px;
+  padding: 0 11px;
+}
+.time-more {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+.card-meta {
+  color: #38506f;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.45;
+}
+.official-note {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  color: #38506f;
+  padding: 10px 11px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
 }
 .reason {
   border-left: 3px solid var(--blue);
@@ -763,13 +961,54 @@ h1 {
 }
 .detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
   align-items: start;
+}
+.detail-main {
+  display: grid;
+  gap: 14px;
+}
+.detail-hero-slot {
+  border: 1px solid #a9dac2;
+  border-radius: 8px;
+  background: var(--green-soft);
+  padding: 14px;
+}
+.detail-hero-slot span {
+  display: block;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 900;
+  margin-bottom: 4px;
+}
+.detail-hero-slot strong {
+  display: block;
+  color: var(--green);
+  font-size: 28px;
+  line-height: 1.15;
+}
+.detail-hero-slot p {
+  margin-top: 6px;
+  color: #246b51;
+  font-size: 13px;
+  font-weight: 780;
+}
+.detail-hero-slot.official {
+  border-color: #b7c3d6;
+  background: var(--blue-soft);
+}
+.detail-hero-slot.official span,
+.detail-hero-slot.official strong {
+  color: #1746a2;
+}
+.detail-hero-slot.official p {
+  color: #38506f;
 }
 .detail-side {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  align-content: start;
 }
 .info-row {
   border: 1px solid var(--line);
@@ -780,6 +1019,29 @@ h1 {
 .info-row strong {
   display: block;
   margin-top: 3px;
+}
+.detail-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.detail-facts .info-row {
+  background: #fff;
+}
+.booking-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  padding: 12px;
+}
+.booking-panel .button {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.timeline-details {
+  border-top: 1px solid var(--line);
+  margin-top: 0;
+  padding-top: 12px;
 }
 details {
   border-top: 1px solid var(--line);
@@ -851,6 +1113,9 @@ summary {
   .date-pills {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .area-pills {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
   .segmented {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -877,6 +1142,12 @@ summary {
   .card-actions .button {
     width: 100%;
   }
+  .card-actions .button:last-child {
+    grid-column: 1 / -1;
+  }
+  .detail-facts {
+    grid-template-columns: 1fr;
+  }
   .timeline {
     grid-template-columns: repeat(10, minmax(0, 1fr));
   }
@@ -901,20 +1172,27 @@ summary {
 <div class="shell">
   <header class="hero">
     <div>
-      <p class="eyebrow">울산 북구 공공체육시설</p>
-      <h1>울산 북구 축구장 빈 시간 찾기</h1>
-      <p class="subtitle">공식 예약 시스템 기준으로 빈 시간을 빠르게 확인하고, 실제 예약은 공식 사이트에서 진행하세요.</p>
+      <p class="eyebrow">울산 전체 공공 축구장</p>
+      <h1>울산 축구장 빈 시간 찾기</h1>
+      <p class="subtitle">북구는 실시간 빈 시간을 바로 보여주고, 다른 구군은 공식 예약 페이지로 빠르게 연결해요.</p>
     </div>
     <div class="actions">
       <div id="lastChecked" class="last-check">마지막 확인: 아직 없음</div>
       <button id="refreshButton" class="button ghost" type="button">새로고침</button>
-      <a class="button" href="https://crs.ubimc.or.kr/yeyak" target="_blank" rel="noreferrer">공식 사이트</a>
+      <a class="button" href="https://crs.ubimc.or.kr/yeyak" target="_blank" rel="noreferrer">북구 예약</a>
     </div>
   </header>
 
-  <div class="notice">이 페이지에서는 예약 현황만 확인할 수 있어요. 최종 예약 가능 여부와 예약 확정은 공식 예약 시스템에서 확인됩니다.</div>
+  <div class="notice">실시간 시간표는 현재 북구 공공체육시설을 우선 지원합니다. 중구·남구·동구·울주군은 공식 확인 카드로 표시하고, 최종 예약 가능 여부는 각 공식 예약 시스템에서 확인하세요.</div>
 
   <section class="filters" aria-label="검색 조건">
+    <div class="filter-block">
+      <div class="filter-title">
+        <h2>지역</h2>
+        <div class="muted" id="selectedAreaLabel"></div>
+      </div>
+      <div id="areaPills" class="area-pills"></div>
+    </div>
     <div class="filter-block">
       <div class="filter-title">
         <h2>날짜</h2>
@@ -929,8 +1207,8 @@ summary {
       </div>
       <div id="durationPills" class="segmented"></div>
       <div class="search-row">
-        <input id="searchInput" class="control" type="search" placeholder="운동장 검색: 달천, 농소, 화봉">
-        <button id="availableOnlyButton" class="button is-active" type="button">예약 가능만 보기</button>
+        <input id="searchInput" class="control" type="search" placeholder="운동장 검색: 달천, 문수, 간절곶">
+        <button id="availableOnlyButton" class="button" type="button">실시간 가능만 보기</button>
       </div>
     </div>
   </section>
@@ -963,16 +1241,18 @@ summary {
 
 <script>
 var $ = function (id) { return document.getElementById(id); };
-var STATE_KEY = 'ulsan-soccer-state-v3';
+var STATE_KEY = 'ulsan-soccer-state-v4';
 var FAVORITE_KEY = 'ulsan-soccer-favorites';
 var DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
+var AREA_OPTIONS = ['울산 전체', '중구', '남구', '동구', '북구', '울주군'];
 var overview = null;
 var favorites = readJson(FAVORITE_KEY, []);
 var state = Object.assign({
+  area: '울산 전체',
   date: todayIso(),
   duration: 2,
   selectedId: 'T0000037',
-  availableOnly: true,
+  availableOnly: false,
   query: '',
   sort: 'best'
 }, readJson(STATE_KEY, {}));
@@ -1074,10 +1354,17 @@ function setLoading(isLoading) {
 }
 
 function renderControls() {
+  if (AREA_OPTIONS.indexOf(state.area) === -1) state.area = '울산 전체';
+  $('selectedAreaLabel').textContent = state.area === '울산 전체' ? '전체 보기' : state.area;
   $('selectedDateLabel').textContent = dateLabel(state.date);
   $('searchInput').value = state.query;
   $('availableOnlyButton').className = 'button' + (state.availableOnly ? ' is-active' : '');
+  $('availableOnlyButton').textContent = state.availableOnly ? '전체/공식 확인 보기' : '실시간 가능만 보기';
   $('sortSelect').value = state.sort;
+
+  $('areaPills').innerHTML = AREA_OPTIONS.map(function (area) {
+    return '<button class="chip' + (area === state.area ? ' is-active' : '') + '" type="button" data-area="' + area + '">' + area + '</button>';
+  }).join('');
 
   var dateOptions = [0, 1, 2, 3].map(function (offset) {
     var date = addDays(todayIso(), offset);
@@ -1095,7 +1382,7 @@ function renderControls() {
 
 function renderLoading() {
   $('summaryGrid').innerHTML = [1, 2, 3].map(function () {
-    return '<div class="summary-card"><span class="muted">확인 중</span><strong>...</strong><p>울산 북구 공공체육시설 예약 현황을 불러오는 중이에요.</p></div>';
+    return '<div class="summary-card"><span class="muted">확인 중</span><strong>...</strong><p>' + escapeHtml(state.area) + ' 축구장 정보를 불러오는 중이에요.</p></div>';
   }).join('');
   $('results').innerHTML = '<div class="empty-state">운동장 카드와 시간표를 불러오는 중이에요.</div>';
   $('detail').innerHTML = '';
@@ -1107,7 +1394,7 @@ async function loadOverview() {
   setLoading(true);
   saveState();
   try {
-    var params = new URLSearchParams({ date: state.date, hours: state.duration, area: '북구' });
+    var params = new URLSearchParams({ date: state.date, hours: state.duration, area: state.area });
     var response = await fetch('/api/ulsan/soccer/overview?' + params.toString());
     overview = await response.json();
     if (!overview.results || overview.error) throw new Error(overview.message || '조회 실패');
@@ -1136,10 +1423,12 @@ function renderAll() {
 function renderSummary() {
   var earliest = overview.earliest;
   var recommended = overview.recommended;
+  var officialCount = overview.officialCheckFacilitiesCount || 0;
+  var realtimeCount = overview.realtimeFacilitiesCount || 0;
   $('summaryGrid').innerHTML =
-    '<article class="summary-card"><span class="muted">' + shortDateLabel(overview.date) + ' 예약 가능</span><strong>' + overview.availableFacilitiesCount + '곳</strong><p>' + overview.facilitiesChecked + '개 운동장을 확인했어요.</p></article>'
+    '<article class="summary-card"><span class="muted">' + shortDateLabel(overview.date) + ' 실시간 가능</span><strong>' + overview.availableFacilitiesCount + '곳</strong><p>총 ' + overview.facilitiesChecked + '곳 중 실시간 조회 ' + realtimeCount + '곳을 확인했어요.</p></article>'
     + '<article class="summary-card"><span class="muted">가장 빠른 시간</span><strong>' + (earliest ? time(earliest.start) : '없음') + '</strong><p>' + (earliest ? escapeHtml(earliest.facility.name) : '선택한 날짜에는 빈 시간이 없어요.') + '</p></article>'
-    + '<article class="summary-card"><span class="muted">' + overview.duration + '시간 연속 가능</span><strong>' + (recommended ? '가능' : '없음') + '</strong><p>' + (recommended ? escapeHtml(recommended.facility.name + ' ' + rangeLabel(recommended.windows[0].start, recommended.windows[0].end)) : '이용 시간을 줄이거나 날짜를 바꿔보세요.') + '</p></article>';
+    + '<article class="summary-card"><span class="muted">공식 확인 필요</span><strong>' + officialCount + '곳</strong><p>' + (officialCount ? '중구·남구·동구·울주군 시설은 공식 사이트로 바로 연결해요.' : (recommended ? escapeHtml(recommended.facility.name + ' ' + rangeLabel(recommended.windows[0].start, recommended.windows[0].end)) : '북구 실시간 조회 결과만 보고 있어요.')) + '</p></article>';
 }
 
 function renderFavorites() {
@@ -1156,7 +1445,7 @@ function renderFavorites() {
 function sortedResults() {
   var query = state.query.trim().toLowerCase();
   var items = (overview?.results || []).filter(function (result) {
-    var haystack = (result.facility.name + ' ' + result.facility.place + ' ' + result.facility.itemName).toLowerCase();
+    var haystack = (result.facility.name + ' ' + result.facility.place + ' ' + result.facility.itemName + ' ' + result.facility.area).toLowerCase();
     if (query && haystack.indexOf(query) === -1) return false;
     if (state.availableOnly && !result.isAvailableForDuration) return false;
     return true;
@@ -1167,6 +1456,7 @@ function sortedResults() {
     if (state.sort === 'many') return b.windows.length - a.windows.length || b.availableHoursCount - a.availableHoursCount;
     if (state.sort === 'early') return (a.windows[0]?.start || '99:99').localeCompare(b.windows[0]?.start || '99:99');
     return Number(b.isAvailableForDuration) - Number(a.isAvailableForDuration)
+      || Number(a.availabilityMode === 'official-check') - Number(b.availabilityMode === 'official-check')
       || Number(isFavorite(b.facility.id)) - Number(isFavorite(a.facility.id))
       || (a.windows[0]?.start || '99:99').localeCompare(b.windows[0]?.start || '99:99')
       || b.windows.length - a.windows.length;
@@ -1177,7 +1467,7 @@ function sortedResults() {
 function renderResults() {
   var items = sortedResults();
   if (!items.length) {
-    $('results').innerHTML = '<div class="empty-state">조건에 맞는 빈 시간이 없어요.<br><button class="button" type="button" data-easy-duration>1시간으로 보기</button> <button class="button" type="button" data-tomorrow>내일 보기</button> <button class="button" type="button" data-show-all>예약 없는 곳도 보기</button></div>';
+    $('results').innerHTML = '<div class="empty-state">조건에 맞는 실시간 가능 시간이 없어요.<br><button class="button" type="button" data-easy-duration>1시간으로 보기</button> <button class="button" type="button" data-tomorrow>내일 보기</button> <button class="button" type="button" data-show-all>공식 확인까지 보기</button></div>';
     return;
   }
 
@@ -1185,22 +1475,33 @@ function renderResults() {
 }
 
 function renderResultCard(result) {
-  var windows = result.windows.slice(0, 4);
-  var badgeClass = result.error ? 'bad' : result.isAvailableForDuration ? 'good' : 'warn';
-  var badgeText = result.error ? '조회 불가' : result.isAvailableForDuration ? state.duration + '시간 연속 가능' : '연속 시간 없음';
-  var windowHtml = windows.length
+  var windows = result.windows.slice(0, 3);
+  var extraWindowCount = Math.max(0, result.windows.length - windows.length);
+  var officialCheck = result.availabilityMode === 'official-check';
+  var badgeClass = officialCheck ? 'info' : result.error ? 'bad' : result.isAvailableForDuration ? 'good' : 'warn';
+  var badgeText = officialCheck ? '공식 확인 필요' : result.error ? '조회 불가' : result.isAvailableForDuration ? state.duration + '시간 연속 가능' : '연속 시간 없음';
+  var firstWindow = result.windows[0];
+  var metaText = officialCheck
+    ? '실시간 시간표는 아직 연결 전이에요. 공식 사이트에서 날짜와 시간을 확인하세요.'
+    : result.error
+    ? '공식 사이트 응답이 지연됐어요.'
+    : firstWindow
+      ? rangeLabel(firstWindow.start, firstWindow.end) + '부터 가능 · 가능 시간 ' + result.windows.length + '개'
+      : '짧은 빈 시간은 있을 수 있지만 선택한 시간만큼 연속 가능하지 않아요.';
+  var windowHtml = officialCheck
+    ? '<span class="official-note">공식 예약 페이지에서 최신 예약 가능 시간을 확인할 수 있어요.</span>'
+    : windows.length
     ? windows.map(function (window) {
       return '<button class="time-button" type="button" data-pick-window="' + result.facility.id + '" data-window="' + window.label + '">' + rangeLabel(window.start, window.end) + '</button>';
-    }).join('')
+    }).join('') + (extraWindowCount ? '<span class="time-more">+' + extraWindowCount + '개</span>' : '')
     : '<span class="muted">선택한 조건에서는 가능한 시간이 없어요.</span>';
 
   return '<article class="result-card" data-card="' + result.facility.id + '">'
     + '<div class="card-top"><button class="favorite-button" type="button" aria-label="' + (isFavorite(result.facility.id) ? '즐겨찾기 해제' : '즐겨찾기 추가') + '" data-favorite="' + result.facility.id + '">' + (isFavorite(result.facility.id) ? '★ 즐겨찾기됨' : '☆ 즐겨찾기') + '</button><span class="badge ' + badgeClass + '">' + badgeText + '</span></div>'
     + '<div><h3>' + escapeHtml(result.facility.name) + '</h3><p class="muted">' + escapeHtml(result.facility.area + ' · ' + result.facility.itemName) + '</p></div>'
-    + '<div class="window-list">' + windowHtml + '</div>'
-    + '<div class="reason">추천 이유: ' + escapeHtml(result.reasons.join(' ')) + '</div>'
-    + renderTimeline(result.timeline)
-    + '<div class="card-actions"><button class="button ghost" type="button" data-detail="' + result.facility.id + '">상세 보기</button><a class="button success" href="' + escapeHtml(result.sourceUrl) + '" target="_blank" rel="noreferrer">공식 예약</a><button class="button" type="button" data-share="' + result.facility.id + '">링크 복사</button></div>'
+    + '<div class="window-list compact">' + windowHtml + '</div>'
+    + '<div class="card-meta">' + escapeHtml(metaText) + '</div>'
+    + '<div class="card-actions"><button class="button ghost" type="button" data-detail="' + result.facility.id + '">상세 보기</button><a class="button success" href="' + escapeHtml(result.sourceUrl) + '" target="_blank" rel="noreferrer">' + (officialCheck ? '공식 확인' : '공식 예약') + '</a><button class="button" type="button" data-share="' + result.facility.id + '">링크 복사</button></div>'
     + '</article>';
 }
 
@@ -1229,16 +1530,30 @@ function renderDetail() {
   state.selectedId = result.facility.id;
   $('mobileOfficialLink').href = result.sourceUrl;
 
-  var windows = result.windows.length
-    ? result.windows.map(function (window) {
+  var officialCheck = result.availabilityMode === 'official-check';
+  var bestWindow = result.windows[0] || null;
+  var previewWindows = result.windows.slice(0, 6);
+  var extraWindowCount = Math.max(0, result.windows.length - previewWindows.length);
+  var windows = officialCheck
+    ? '<span class="official-note">실시간 시간표 연동 전이라 공식 예약 페이지에서 직접 확인해야 해요.</span>'
+    : previewWindows.length
+    ? previewWindows.map(function (window) {
       return '<button class="time-button" type="button" data-pick-window="' + result.facility.id + '" data-window="' + window.label + '">' + rangeLabel(window.start, window.end) + ' 예약 가능</button>';
-    }).join('')
+    }).join('') + (extraWindowCount ? '<span class="time-more">+' + extraWindowCount + '개 더 있음</span>' : '')
     : '<div class="empty-state">이 날짜에는 ' + state.duration + '시간 연속 가능한 시간이 없어요.</div>';
   var booked = result.slots.filter(function (slot) { return slot.status === 'BOOKED'; });
+  var heroSlot = officialCheck
+    ? '<div class="detail-hero-slot official"><span>공식 확인 필요</span><strong>공식 예약 페이지</strong><p>' + escapeHtml(result.facility.area) + ' 시설은 현재 실시간 시간표 대신 공식 사이트로 연결합니다.</p></div>'
+    : bestWindow
+    ? '<div class="detail-hero-slot"><span>가장 먼저 예약하기 좋은 시간</span><strong>' + rangeLabel(bestWindow.start, bestWindow.end) + '</strong><p>' + state.duration + '시간 연속 가능 · 아래 공식 사이트에서 최종 예약하세요.</p></div>'
+    : '<div class="empty-state">선택한 날짜에는 ' + state.duration + '시간 연속 가능한 시간이 없어요. 이용 시간을 줄이거나 날짜를 바꿔보세요.</div>';
+  var timelineBlock = officialCheck
+    ? '<div class="official-note">이 운동장의 시간표는 공식 예약 시스템에서 확인해 주세요.</div>'
+    : '<details class="timeline-details"><summary>전체 시간표 보기</summary><div style="margin-top:12px">' + renderTimeline(result.timeline) + '</div></details><details><summary>이미 예약된 시간 보기</summary><div class="window-list" style="margin-top:10px">' + (booked.length ? booked.map(function (slot) { return '<span class="chip">' + rangeLabel(slot.start, slot.end) + '</span>'; }).join('') : '<span class="muted">예약된 시간이 없어요.</span>') + '</div></details>';
 
   $('detail').innerHTML = '<div class="detail-grid">'
-    + '<div><p class="muted">현재 보고 있는 운동장</p><h2>' + escapeHtml(result.facility.name) + '</h2><p class="subtitle">' + escapeHtml(result.facility.area + ' · ' + result.facility.itemName) + '</p><div class="window-list" style="margin-top:12px">' + windows + '</div><div style="margin-top:12px">' + renderTimeline(result.timeline) + '</div><details><summary>이미 예약된 시간 보기</summary><div class="window-list" style="margin-top:10px">' + (booked.length ? booked.map(function (slot) { return '<span class="chip">' + rangeLabel(slot.start, slot.end) + '</span>'; }).join('') : '<span class="muted">예약된 시간이 없어요.</span>') + '</div></details></div>'
-    + '<aside class="detail-side"><div class="info-row"><span class="muted">운영 시간</span><strong>05:00~24:00</strong></div><div class="info-row"><span class="muted">예약 단위</span><strong>1시간 단위 조회</strong></div><div class="info-row"><span class="muted">조명 여부</span><strong>공식 페이지에서 확인</strong></div><a class="button success" href="' + escapeHtml(result.sourceUrl) + '" target="_blank" rel="noreferrer">공식 사이트에서 예약하기</a><p class="muted">최종 예약 가능 여부는 공식 사이트에서 확인됩니다.</p></aside>'
+    + '<div class="detail-main"><div><p class="muted">현재 보고 있는 운동장</p><h2>' + escapeHtml(result.facility.name) + '</h2><p class="subtitle">' + escapeHtml(result.facility.area + ' · ' + result.facility.itemName) + '</p></div>' + heroSlot + '<div><p class="muted" style="margin-bottom:8px">' + (officialCheck ? '확인 방법' : '다른 가능 시간') + '</p><div class="window-list compact">' + windows + '</div></div>' + timelineBlock + '</div>'
+    + '<aside class="detail-side"><div class="booking-panel"><a class="button success" href="' + escapeHtml(result.sourceUrl) + '" target="_blank" rel="noreferrer">' + (officialCheck ? '공식 사이트에서 확인하기' : '공식 사이트에서 예약하기') + '</a><p class="muted">최종 예약 가능 여부와 조명 정보는 공식 사이트에서 확인됩니다.</p></div><div class="detail-facts"><div class="info-row"><span class="muted">조회 상태</span><strong>' + (officialCheck ? '공식 확인' : '실시간') + '</strong></div><div class="info-row"><span class="muted">예약 단위</span><strong>' + (officialCheck ? '공식 기준' : '1시간') + '</strong></div></div></aside>'
     + '</div>';
 }
 
@@ -1266,6 +1581,7 @@ function copyShare(id, windowLabel) {
 }
 
 document.addEventListener('click', function (event) {
+  var areaButton = event.target.closest('[data-area]');
   var dateButton = event.target.closest('[data-date]');
   var durationButton = event.target.closest('[data-duration]');
   var favoriteButton = event.target.closest('[data-favorite]');
@@ -1274,7 +1590,11 @@ document.addEventListener('click', function (event) {
   var windowButton = event.target.closest('[data-pick-window]');
   var shareButton = event.target.closest('[data-share]');
 
-  if (dateButton) {
+  if (areaButton) {
+    state.area = areaButton.dataset.area;
+    state.availableOnly = false;
+    loadOverview();
+  } else if (dateButton) {
     state.date = dateButton.dataset.date;
     loadOverview();
   } else if (durationButton) {
@@ -1292,7 +1612,7 @@ document.addEventListener('click', function (event) {
   } else if (windowButton) {
     state.selectedId = windowButton.dataset.pickWindow;
     renderAll();
-    copyShare(windowButton.dataset.pickWindow, windowButton.dataset.window);
+    $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } else if (shareButton) {
     copyShare(shareButton.dataset.share);
   } else if (event.target.closest('[data-easy-duration]')) {
