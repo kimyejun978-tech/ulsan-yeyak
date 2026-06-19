@@ -1,23 +1,36 @@
-# 울산 축구장 예약/가능 시간 체크 (PWA + API)
+# 울산 북구 축구장 빈 시간 찾기
 
-울산공공시설예약 사이트에 등록된 축구장만 모아서 특정 날짜의 예약/가능 시간을 빠르게 확인하는 PWA입니다.
+울산공공시설예약에 등록된 축구장/다목적구장의 예약 현황을 모아서, 특정 날짜에 비어 있는 시간을 먼저 보여주는 Cloudflare Workers 앱입니다.
+
+- 실서비스: https://ulsan-soccer-reservation-checker.kimyejun978.workers.dev
+- 공식 예약: https://crs.ubimc.or.kr/yeyak
+- 현재 범위: 울산 북구 공공체육시설 13곳
+
+최종 예약 가능 여부와 예약 확정은 공식 예약 시스템에서 확인해야 합니다.
 
 ## 주요 기능
 
-- 축구장 전용 목록: 공식 시설 목록의 운동장명/장소명을 파싱하고 축구/인조잔디/다목적구장만 표시
-- 즐겨찾기: 자주 쓰는 운동장을 브라우저에 저장
-- 검색형 선택 UI: 기본 드롭다운 대신 실제 운동장명을 빠르게 검색하고 선택
-- 주변 추천: 지역, 날짜, 시작 시간, 이용 시간을 고르면 예약 없는 순으로 축구장 추천
-- 달천운동장 호환: 기존 `/api/dalcheon/soccer` 엔드포인트 유지
+- 축구장만 표시: 야구장, 테니스장 같은 다른 종목은 제외하고 축구장/다목적구장만 보여줍니다.
+- 운동장 이름 우선 UI: `달천운동장 인조잔디축구장`처럼 실제 운동장 이름이 카드와 상세 화면에 바로 나옵니다.
+- 결론 먼저 보기: 예약 가능 운동장 수, 가장 빠른 시간, 연속 이용 가능 여부를 첫 화면에서 확인할 수 있습니다.
+- 추천 결과: 날짜와 이용 시간을 고르면 예약 가능한 시간이 많은 곳과 빠른 곳을 먼저 정렬합니다.
+- 즐겨찾기: 자주 확인하는 운동장을 브라우저에 저장합니다.
+- 시간표: 05:00부터 24:00까지 시간대별 가능/예약 상태를 한눈에 봅니다.
+- 공식 예약 연결: 각 운동장 카드와 상세 화면에서 공식 예약 페이지로 바로 이동합니다.
 
-## 구성
+## 배포
 
-- `apps/api`: 울산공공시설예약 AJAX 응답을 JSON API로 정리
-- `apps/web`: React PWA — 축구장 선택, 즐겨찾기, 날짜 이동, 주변 추천
+이 저장소는 Cloudflare Workers 무료 플랜에 바로 올릴 수 있는 단일 파일 `cloudflare-worker.js`를 포함합니다. 웹 화면과 API가 같은 Worker에서 동작하므로 별도 서버를 켜둘 필요가 없습니다.
+
+```bash
+npx wrangler deploy
+```
+
+현재 Worker 이름은 `ulsan-soccer-reservation-checker`입니다.
 
 ## 로컬 실행
 
-### 가장 쉬운 실행(배포용 단일 서버)
+Cloudflare Worker와 비슷한 단일 서버로 확인하려면:
 
 ```bash
 node deploy-server.mjs
@@ -25,15 +38,11 @@ node deploy-server.mjs
 
 - Web/API: http://localhost:8787
 
-### 1) 의존성 설치
+개발 서버를 따로 띄우려면:
 
 ```bash
 npm i
 ```
-
-### 2) 실행
-
-터미널 2개에서:
 
 ```bash
 cd apps/api
@@ -48,40 +57,13 @@ npm run dev
 - Web: http://localhost:5173
 - API: http://localhost:8787/health
 
-## 배포
-
-이 프로젝트는 Cloudflare Workers 무료 플랜에 올릴 수 있는 `cloudflare-worker.js`를 포함합니다. Workers는 웹 화면과 API를 같은 무료 서버리스 엔드포인트에서 처리하므로 이 앱에 가장 적합합니다.
-
-### Cloudflare Workers
-
-```bash
-npx wrangler deploy
-```
-
-대시보드에서 직접 만들 때는 Worker 이름을 `ulsan-soccer-reservation-checker`로 만들고, `cloudflare-worker.js` 내용을 붙여넣어 배포하면 됩니다.
-
-### Render
-
-Node 서버 방식이 필요하면 Render도 사용할 수 있습니다.
-
-1. 이 폴더를 GitHub 저장소에 push
-2. Render에서 New → Blueprint 선택
-3. 저장소를 연결하면 `render.yaml` 기준으로 자동 배포
-
-직접 Web Service로 만들 때는 다음 값만 지정하면 됩니다.
-
-- Build Command: 비워두기
-- Start Command: `node deploy-server.mjs`
-- Health Check Path: `/health`
-
-### Docker 지원
-
-```bash
-docker build -t ulsan-soccer-reservation-checker .
-docker run -p 8787:8787 ulsan-soccer-reservation-checker
-```
-
 ## API
+
+### 상태 확인
+
+```http
+GET /health
+```
 
 ### 축구장 목록
 
@@ -89,9 +71,9 @@ docker run -p 8787:8787 ulsan-soccer-reservation-checker
 GET /api/ulsan/facilities
 ```
 
-울산공공시설예약 체육시설 목록에서 축구장 후보만 필터링해 반환합니다. 원본 목록 조회가 실패하면 달천운동장 기본값으로 동작합니다.
+울산 북구 축구장/다목적구장 목록을 반환합니다.
 
-### 선택 축구장 시간 조회
+### 선택 운동장 시간 조회
 
 ```http
 GET /api/ulsan/sports?facilityId=T0000037&date=YYYY-MM-DD
@@ -100,15 +82,23 @@ GET /api/ulsan/sports?facilityId=T0000037&date=YYYY-MM-DD
 - `facilityId`: 울산공공시설예약의 `item_id`
 - `date`: 생략 시 오늘
 
-### 주변 축구장 추천
+### 추천용 전체 현황
+
+```http
+GET /api/ulsan/soccer/overview?area=북구&date=YYYY-MM-DD&hours=2
+```
+
+선택한 날짜와 이용 시간 기준으로 모든 운동장을 조회한 뒤, 예약 가능한 시간 묶음과 추천 순서를 반환합니다. 첫 화면의 요약 카드와 추천 카드가 이 API를 사용합니다.
+
+### 특정 시간대 추천
 
 ```http
 GET /api/ulsan/soccer/recommendations?area=북구&date=YYYY-MM-DD&start=19:00&hours=2
 ```
 
-선택 지역과 인접 지역의 축구장을 조회한 뒤, 설정한 시간대에 예약이 없는 곳을 먼저 보여줍니다.
+설정한 시작 시간과 이용 시간에 예약이 비어 있는 운동장을 먼저 보여줍니다.
 
-### 기존 달천 전용 엔드포인트
+### 달천운동장 호환 엔드포인트
 
 ```http
 GET /api/dalcheon/soccer?date=YYYY-MM-DD
@@ -116,15 +106,13 @@ GET /api/dalcheon/soccer?date=YYYY-MM-DD
 
 기존 앱/북마크 호환을 위해 유지합니다.
 
-## 환경변수
+## 구성
 
-- `PORT` (default `8787`)
-- `HOST` (default `0.0.0.0`)
-- `CACHE_TTL_MS` (default `300000`)
-- `FACILITY_CACHE_TTL_MS` (default `21600000`)
-- `CORS=1` 로컬에서 Vite와 API를 따로 띄울 때 사용
-- `UBIMC_REJECT_UNAUTHORIZED=1` 원본 사이트 TLS 인증서를 엄격하게 검증
+- `cloudflare-worker.js`: 실서비스용 Worker. 화면과 API를 함께 제공합니다.
+- `deploy-server.mjs`: 로컬 단일 서버 실행용 파일입니다.
+- `apps/api`: 기존 Node API 구현입니다.
+- `apps/web`: 기존 React PWA 구현입니다.
 
 ## 참고
 
-원본 예약 사이트의 시설 목록 HTML 구조가 바뀌면 자동 탐색이 제한될 수 있습니다. 이 경우 `apps/api/src/dalcheon.js`의 `SEEDED_FACILITIES`에 자주 쓰는 축구장의 `item_id`를 추가하면 선택 목록과 추천 목록에 노출됩니다.
+현재 공식 예약 데이터에서 안정적으로 확인 가능한 범위는 울산 북구 공공체육시설입니다. 공식 사이트의 시설 목록이나 예약 HTML 구조가 바뀌면 파싱 로직을 조정해야 할 수 있습니다.
