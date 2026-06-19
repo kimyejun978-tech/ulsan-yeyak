@@ -13,17 +13,25 @@ const NEARBY_AREAS = {
   북구: ['북구', '중구', '동구', '울주군', '남구'],
   울주군: ['울주군', '남구', '북구', '중구', '동구']
 };
-const SOCCER_KEYWORDS = ['축구', '풋살', '인조잔디'];
+const SOCCER_KEYWORDS = ['축구', '풋살', '인조잔디', '다목적구장'];
 const NON_SOCCER_KEYWORDS = ['야구', '테니스', '배드민턴', '농구', '족구', '게이트볼', '수영', '탁구'];
-const SEEDED_FACILITIES = [{
-  id: DEFAULT_FACILITY_ID,
-  itemId: DEFAULT_FACILITY_ID,
-  name: '달천운동장 인조잔디축구장',
-  shortName: '달천축구장',
-  area: '북구',
-  itemType: DEFAULT_ITEM_TYPE,
-  memId: DEFAULT_MEM_ID
-}];
+const OFFICIAL_FACILITIES = {
+  T0000064: { place: '효문운동장', itemName: '인조잔디축구장', area: '북구', memId: 'B0001023' },
+  T0000037: { place: '달천운동장', itemName: '인조잔디축구장', area: '북구', memId: 'B0001016' },
+  T0000046: { place: '염포운동장', itemName: '인조잔디축구장', area: '북구', memId: 'B0001018' },
+  T0000044: { place: '양정생활체육공원', itemName: '인조잔디축구장', area: '북구', memId: 'B0001017' },
+  T0000033: { place: '농소운동장', itemName: '인조잔디축구장(A)', area: '북구', memId: 'B0001015' },
+  T0000034: { place: '농소운동장', itemName: '인조잔디축구장(B)', area: '북구', memId: 'B0001015' },
+  T0000040: { place: '상안다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001013' },
+  T0000039: { place: '명촌다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001012' },
+  T0000058: { place: '화봉다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001021' },
+  T0000059: { place: '효문다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001022' },
+  T0000032: { place: '가람다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001011' },
+  T0000056: { place: '중산다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001020' },
+  T0000042: { place: '송정다목적구장', itemName: '다목적구장', area: '북구', memId: 'B0001014' }
+};
+const NON_SOCCER_ITEM_IDS = new Set(['T0000047', 'T0000048', 'T0000049', 'T0000050', 'T0000051', 'T0000053']);
+const SEEDED_FACILITIES = [facilityFromOfficial(DEFAULT_FACILITY_ID)];
 const FACILITY_LIST_URLS = [
   `${BASE_URL}/yeyak/sports_facilities/facility_list?ITEM_TYPE=I&selItemKind=`,
   `${BASE_URL}/yeyak/sports_facilities/facility_list?ITEM_TYPE=I`,
@@ -131,7 +139,8 @@ function inferArea(name) {
 }
 
 function isSoccerFacility(facility) {
-  const text = `${facility.name || ''} ${facility.shortName || ''}`.replace(/\s+/g, '');
+  if (NON_SOCCER_ITEM_IDS.has(facility.itemId || facility.id)) return false;
+  const text = `${facility.name || ''} ${facility.shortName || ''} ${facility.place || ''} ${facility.itemName || ''}`.replace(/\s+/g, '');
   if (!text) return false;
   if (NON_SOCCER_KEYWORDS.some((keyword) => text.includes(keyword))) return false;
   return SOCCER_KEYWORDS.some((keyword) => text.includes(keyword));
@@ -140,7 +149,59 @@ function isSoccerFacility(facility) {
 function shortFacilityName(name, itemId) {
   const clean = cleanText(name);
   if (!clean) return `울산 축구장 ${itemId}`;
-  return clean.replace(/\s*예약\s*/g, ' ').replace(/\s*상세보기\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalized = clean
+    .replace(/\s*예약\s*하기\s*/g, ' ')
+    .replace(/\s*예약\s*/g, ' ')
+    .replace(/\s*상세\s*보기\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized || `울산 축구장 ${itemId}`;
+}
+
+function isGenericFacilityName(name, itemId) {
+  const clean = cleanText(name);
+  return !clean || clean === `울산 축구장 ${itemId}` || /^울산\s*축구장\s*T\d+$/i.test(clean);
+}
+
+function composeFacilityName(place, itemName, itemId) {
+  const placeName = cleanText(place);
+  const cleanItem = shortFacilityName(itemName, itemId);
+  if (!placeName) return cleanItem;
+  if (isGenericFacilityName(cleanItem, itemId)) return placeName;
+  if (placeName.includes(cleanItem)) return placeName;
+  if (cleanItem.includes(placeName)) return cleanItem;
+  return `${placeName} ${cleanItem}`;
+}
+
+function officialSourceUrl(itemId, itemType = DEFAULT_ITEM_TYPE, memId = DEFAULT_MEM_ID) {
+  const params = new URLSearchParams({
+    ITEM_TYPE: itemType,
+    selItemKind: '',
+    mem_id: memId,
+    item_id: itemId
+  });
+  return `${BASE_URL}/yeyak/sports_facilities/facility_view?${params.toString()}`;
+}
+
+function facilityFromOfficial(itemId, overrides = {}) {
+  const official = OFFICIAL_FACILITIES[itemId] || {};
+  const itemType = overrides.itemType || DEFAULT_ITEM_TYPE;
+  const memId = overrides.memId || official.memId || DEFAULT_MEM_ID;
+  const itemName = overrides.itemName || official.itemName || shortFacilityName(overrides.label || '', itemId);
+  const place = overrides.place || official.place || '';
+  const name = composeFacilityName(place, itemName, itemId);
+  return {
+    id: itemId,
+    itemId,
+    name,
+    shortName: name,
+    place,
+    itemName: isGenericFacilityName(itemName, itemId) ? '' : itemName,
+    area: overrides.area || official.area || inferArea(name),
+    itemType,
+    memId,
+    sourceUrl: overrides.sourceUrl || officialSourceUrl(itemId, itemType, memId)
+  };
 }
 
 function facilitySourceUrl(facility) {
@@ -154,45 +215,54 @@ function facilitySourceUrl(facility) {
   return `${BASE_URL}/yeyak/sports_facilities/facility_view?${params.toString()}`;
 }
 
-function facilityFromUrl(rawUrl, label = '') {
+function facilityFromUrl(rawUrl, label = '', baseUrl = BASE_URL, place = '') {
   try {
-    const url = new URL(htmlDecode(rawUrl), BASE_URL);
+    let href = htmlDecode(rawUrl).trim();
+    if (/^sports_facilities\//i.test(href)) href = `/yeyak/${href}`;
+    const url = new URL(href, baseUrl);
     const itemId = url.searchParams.get('item_id');
     if (!itemId || !/^T\d+$/i.test(itemId)) return null;
-    const name = shortFacilityName(label, itemId);
-    return {
-      id: itemId,
-      itemId,
-      name,
-      shortName: name,
-      area: inferArea(name),
+    const parsedItemName = shortFacilityName(label, itemId);
+    const itemName = isGenericFacilityName(parsedItemName, itemId) ? '' : parsedItemName;
+    return facilityFromOfficial(itemId, {
       itemType: url.searchParams.get('ITEM_TYPE') || DEFAULT_ITEM_TYPE,
-      memId: url.searchParams.get('mem_id') || DEFAULT_MEM_ID,
+      memId: url.searchParams.get('mem_id') || undefined,
+      itemName,
+      place: cleanText(place),
       sourceUrl: url.toString()
-    };
+    });
   } catch {
     return null;
   }
 }
 
-function extractFacilities(source) {
+function extractFacilities(source, baseUrl = BASE_URL) {
   const facilities = [];
   const push = (facility) => { if (facility) facilities.push(facility); };
+  const rowRe = /<tr\b[\s\S]*?<\/tr>/gi;
+  for (const rowMatch of source.matchAll(rowRe)) {
+    const row = rowMatch[0];
+    if (!row.includes('facility_view')) continue;
+    const nameLinkRe = /<td[^>]*class=["'][^"']*name[^"']*["'][^>]*>[\s\S]*?<a\b[^>]*href=["']([^"']*facility_view\?[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i;
+    const link = nameLinkRe.exec(row) || /<a\b[^>]*href=["']([^"']*facility_view\?[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i.exec(row);
+    const placeMatch = /<td[^>]*class=["'][^"']*place[^"']*["'][^>]*>([\s\S]*?)<\/td>/i.exec(row);
+    if (link) push(facilityFromUrl(link[1], link[2], baseUrl, placeMatch?.[1] || ''));
+  }
   const anchorRe = /<a\b[^>]*href=["']([^"']*facility_view\?[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  for (const match of source.matchAll(anchorRe)) push(facilityFromUrl(match[1], match[2]));
+  for (const match of source.matchAll(anchorRe)) push(facilityFromUrl(match[1], match[2], baseUrl));
   const hrefRe = /(?:href|data-url)=["']([^"']*facility_view\?[^"']*)["']/gi;
-  for (const match of source.matchAll(hrefRe)) push(facilityFromUrl(match[1]));
+  for (const match of source.matchAll(hrefRe)) push(facilityFromUrl(match[1], '', baseUrl));
   const bareRe = /sports_facilities\/facility_view\?[^"'<>\\\s)]+/gi;
-  for (const match of source.matchAll(bareRe)) push(facilityFromUrl(match[0]));
+  for (const match of source.matchAll(bareRe)) push(facilityFromUrl(match[0], '', baseUrl));
   return facilities;
 }
 
-function extractFacilityListUrls(source) {
+function extractFacilityListUrls(source, baseUrl = BASE_URL) {
   const urls = [];
   const hrefRe = /(?:href|data-url)=["']([^"']*sports_facilities\/facility_list[^"']*)["']/gi;
   for (const match of source.matchAll(hrefRe)) {
     try {
-      const url = new URL(htmlDecode(match[1]), BASE_URL);
+      const url = new URL(htmlDecode(match[1]), baseUrl);
       if ((url.searchParams.get('ITEM_TYPE') || DEFAULT_ITEM_TYPE) === DEFAULT_ITEM_TYPE) urls.push(url.toString());
     } catch {
       // ignore malformed links
@@ -201,19 +271,36 @@ function extractFacilityListUrls(source) {
   return urls;
 }
 
+function preferredText(next, previous, itemId) {
+  const nextValue = cleanText(next || '');
+  const previousValue = cleanText(previous || '');
+  if (!nextValue) return previousValue;
+  if (!previousValue) return nextValue;
+  const nextGeneric = isGenericFacilityName(nextValue, itemId);
+  const previousGeneric = isGenericFacilityName(previousValue, itemId);
+  if (nextGeneric && !previousGeneric) return previousValue;
+  if (!nextGeneric && previousGeneric) return nextValue;
+  return nextValue.length >= previousValue.length ? nextValue : previousValue;
+}
+
 function mergeFacilities(facilities) {
   const byId = new Map();
   for (const facility of facilities) {
     if (!facility?.itemId) continue;
     const previous = byId.get(facility.itemId);
-    const name = facility.name || previous?.name || `울산 축구장 ${facility.itemId}`;
+    const name = preferredText(facility.name, previous?.name, facility.itemId) || `울산 축구장 ${facility.itemId}`;
+    const shortName = preferredText(facility.shortName, previous?.shortName, facility.itemId) || name;
+    const place = preferredText(facility.place, previous?.place, facility.itemId);
+    const itemName = preferredText(facility.itemName, previous?.itemName, facility.itemId);
     byId.set(facility.itemId, {
       ...(previous || {}),
       ...facility,
       id: facility.itemId,
       name,
-      shortName: facility.shortName || previous?.shortName || name,
-      area: facility.area || previous?.area || inferArea(name)
+      shortName,
+      place,
+      itemName,
+      area: facility.area || previous?.area || OFFICIAL_FACILITIES[facility.itemId]?.area || inferArea(name)
     });
   }
   return [...byId.values()]
@@ -238,8 +325,8 @@ async function loadFacilityCatalog() {
     visited.add(url);
     try {
       const source = await requestText(url);
-      discovered.push(...extractFacilities(source));
-      for (const nextUrl of extractFacilityListUrls(source)) {
+      discovered.push(...extractFacilities(source, url));
+      for (const nextUrl of extractFacilityListUrls(source, url)) {
         if (!visited.has(nextUrl) && !queue.includes(nextUrl)) queue.push(nextUrl);
       }
     } catch (error) {
@@ -281,6 +368,8 @@ async function resolveFacility(facilityId) {
   const catalog = await loadFacilityCatalog();
   const known = catalog.facilities.find((facility) => facility.id === id || facility.itemId === id);
   if (known) return known;
+  const official = facilityFromOfficial(id);
+  if (official && OFFICIAL_FACILITIES[id]) return official;
   if (/^T\d+$/i.test(id)) {
     return {
       id,
@@ -511,42 +600,48 @@ const APP_HTML = String.raw`<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1220">
+  <meta name="theme-color" content="#f5f7fb">
   <title>울산 축구장 예약 확인</title>
   <style>
-    :root{color-scheme:dark;--bg:#0b1220;--panel:#0f1b2d;--line:#20314f;--text:#e7eefc;--muted:#a8b3c7;--ok:#22c55e;--no:#ef4444;--blue:#3b82f6}
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-    button,select,input{font:inherit}.wrap{max-width:780px;margin:0 auto;padding:16px 14px 28px}.header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-    h1{font-size:24px;margin:0}.sub{color:var(--muted);font-weight:800;margin-top:2px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
-    .row{display:flex;gap:10px;align-items:end}.grow{flex:1}.field{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}.label{font-size:13px;font-weight:900;color:var(--muted)}
-    select,input,.btn{background:#0a1426;border:1px solid var(--line);color:var(--text);border-radius:12px;padding:12px 14px;font-weight:900;min-width:0}.btn{cursor:pointer}.btn.primary{border-color:rgba(59,130,246,.65);background:rgba(59,130,246,.16)}
-    .star{width:48px;height:48px;font-size:23px;padding:0}.active{border-color:#f59e0b;color:#fde68a}.chips{display:flex;gap:8px;overflow:auto;margin-bottom:12px}.chip{white-space:nowrap}
-    .dateNav{display:flex;gap:10px}.dateNav input{flex:1}.quick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.grid{display:grid;grid-template-columns:1.1fr 1.3fr 1fr .8fr;gap:10px}
-    .blocks{display:flex;flex-wrap:wrap;gap:10px}.block{border:1px solid var(--line);background:#0a1426;border-radius:14px;padding:12px 14px;min-width:160px;flex:1 1 180px}.ok{border-color:rgba(34,197,94,.42);background:rgba(34,197,94,.10)}.bad{border-color:rgba(239,68,68,.42);background:rgba(239,68,68,.10)}
-    .sectionTitle{font-size:15px;color:var(--muted);font-weight:900;margin-bottom:10px}.hero{border:1px solid var(--line);border-radius:16px;padding:18px;text-align:center}.hero b{font-size:22px}.notice{color:#fde68a;background:rgba(245,158,11,.13);border:1px solid rgba(245,158,11,.35);padding:12px;border-radius:14px;font-weight:900}.error{color:#fecaca;background:#3a1111;border:1px solid #7f1d1d;padding:12px;border-radius:14px}
-    .recList{display:flex;flex-direction:column;gap:10px;margin-top:12px}.rec{display:grid;grid-template-columns:42px 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);background:#0a1426;border-radius:14px;padding:10px}.rec.best{border-color:rgba(34,197,94,.55);background:rgba(34,197,94,.10)}.recMain{background:transparent;border:0;color:var(--text);text-align:left;padding:0}.meta{display:block;color:var(--muted);font-size:14px;font-weight:900;margin-top:4px}.pill{border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.10);color:#fde68a;padding:7px 10px;border-radius:999px;font-size:13px;font-weight:950;white-space:nowrap}.pill.good{border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.12);color:#bbf7d0}
-    .made{margin:34px 0 8px;text-align:center;font-weight:950}.footer{text-align:center;color:var(--muted);font-size:14px}.footer a{color:#93c5fd;text-decoration:none}
-    @media(max-width:680px){.grid{grid-template-columns:1fr 1fr}.rec{grid-template-columns:42px 1fr}.pill{grid-column:2;justify-self:start}}@media(max-width:520px){.header,.row{align-items:stretch;flex-direction:column}.grid{grid-template-columns:1fr}.block{min-width:100%}}
+    :root{color-scheme:light;--bg:#f5f7fb;--surface:#fff;--soft:#f1f5f9;--line:#d8e0eb;--lineStrong:#aebbd0;--text:#172033;--muted:#66758a;--blue:#1f66e5;--blueSoft:#e9f0ff;--green:#118252;--greenSoft:#e8f7ef;--red:#bd3c3c;--redSoft:#fff1f1;--amber:#98670f;--amberSoft:#fff7df}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;letter-spacing:0}
+    button,input,select{font:inherit} button{cursor:pointer}.app{max-width:980px;margin:0 auto;padding:18px 14px 34px}.top{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:12px}
+    h1{margin:0;font-size:28px;line-height:1.1}.eyebrow{margin:0 0 6px;color:var(--blue);font-size:12px;font-weight:950}.sub{margin:6px 0 0;color:var(--muted);font-size:14px;font-weight:800}.surface{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px;box-shadow:0 8px 24px rgba(18,31,54,.06)}
+    .sectionHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.sectionTitle{font-size:16px;font-weight:950}.label{display:block;margin-bottom:7px;color:var(--muted);font-size:13px;font-weight:900}.selectRow,.dateLine{display:flex;gap:10px;align-items:end}.grow{flex:1}.input,select{width:100%;min-width:0;border:1px solid var(--lineStrong);background:#fff;color:var(--text);border-radius:8px;padding:12px 13px;font-weight:850}
+    .tool,.btn{min-height:46px;border:1px solid var(--lineStrong);background:#fff;color:var(--text);border-radius:8px;padding:0 14px;font-weight:950}.tool{width:48px;padding:0;font-size:22px}.btn.primary{border-color:#1f66e5;background:var(--blue);color:#fff}.btn.subtle{background:var(--soft)}.favorite.active,.miniStar{border-color:#d49b16;color:#a16207;background:var(--amberSoft)}
+    .favRail{display:flex;gap:8px;overflow:auto;margin:10px 0}.favRail:empty{display:none}.chip{white-space:nowrap;background:var(--amberSoft);border-color:#e9c86e;color:#73510d}
+    .facilityList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:318px;overflow:auto;padding-right:2px}.facilityItem{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:70px;border:1px solid var(--line);background:#fff;border-radius:8px;padding:10px 11px;text-align:left;color:var(--text)}.facilityItem.selected{border-color:#1f66e5;background:var(--blueSoft)}.facilityText{min-width:0}.facilityText b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}.facilityText small{display:block;margin-top:4px;color:var(--muted);font-size:12px;font-weight:800}.miniStar{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;font-size:16px;flex:0 0 auto}.empty{border:1px dashed var(--lineStrong);border-radius:8px;padding:16px;text-align:center;color:var(--muted);font-weight:850}
+    .quick{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}.message{margin-top:10px;border-radius:8px;padding:11px 12px;font-weight:900}.message.wait{background:var(--amberSoft);border:1px solid #ead28b;color:var(--amber)}.message.error{background:var(--redSoft);border:1px solid #f0b9b9;color:var(--red)}
+    .summary{display:grid;grid-template-columns:1.3fr repeat(2,minmax(110px,.5fr));gap:10px}.stat{border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--soft)}.stat b{display:block;font-size:24px}.stat span{display:block;color:var(--muted);font-size:13px;font-weight:900}.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}.blocks{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.block{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}.block b{display:block;font-size:16px}.block .meta{margin-top:5px}.okPanel{border-color:#93d7b6;background:var(--greenSoft)}.badPanel{border-color:#e8a1a1;background:var(--redSoft)}
+    .meta{display:block;color:var(--muted);font-size:13px;font-weight:850}.grid{display:grid;grid-template-columns:1fr 1.2fr 1fr .8fr;gap:10px}.recList{display:flex;flex-direction:column;gap:8px;margin-top:12px}.rec{display:grid;grid-template-columns:48px 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);background:#fff;border-radius:8px;padding:9px}.rec.best{border-color:#74c79d;background:var(--greenSoft)}.recMain{background:transparent;border:0;color:var(--text);text-align:left;padding:0}.pill{border:1px solid #e6c161;background:var(--amberSoft);color:#76520a;padding:7px 10px;border-radius:8px;font-size:13px;font-weight:950;white-space:nowrap}.pill.good{border-color:#6fc99b;background:#dff5ea;color:#0d6840}.made{margin:26px 0 7px;text-align:center;font-weight:950}.footer{text-align:center;color:var(--muted);font-size:14px}.footer a{color:var(--blue);text-decoration:none;font-weight:850}
+    @media(max-width:760px){.facilityList,.split,.summary{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.quick{grid-template-columns:1fr 1fr}.rec{grid-template-columns:48px 1fr}.pill{grid-column:2;justify-self:start}}@media(max-width:520px){.top,.sectionHead,.selectRow,.dateLine{align-items:stretch;flex-direction:column}.tool{width:100%}h1{font-size:24px}.grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="header"><div><h1>울산 축구장 예약 확인</h1><div class="sub" id="subtitle">불러오는 중</div></div><button class="btn" id="refresh">새로고침</button></header>
-  <section class="panel">
-    <div class="row"><label class="field grow"><span class="label">축구장</span><select id="facility"></select></label><button class="btn star" id="favorite" title="즐겨찾기">☆</button></div>
-    <div class="chips" id="favorites"></div>
-    <div class="dateNav"><button class="btn" id="prev">← 이전</button><input id="date" type="date"><button class="btn" id="next">다음 →</button></div>
+<div class="app">
+  <header class="top">
+    <div><p class="eyebrow">ULSAN FOOTBALL</p><h1>울산 축구장 예약</h1><p class="sub" id="subtitle">운동장 불러오는 중</p></div>
+    <button class="tool" id="refresh" title="새로고침" aria-label="새로고침">↻</button>
+  </header>
+  <section class="surface">
+    <div class="sectionHead"><div><div class="sectionTitle">운동장 선택</div><p class="sub">실제 울산 공공예약 시설명 기준</p></div><button class="tool favorite" id="favorite" title="즐겨찾기" aria-label="즐겨찾기">☆</button></div>
+    <label class="grow"><span class="label">검색</span><input class="input" id="facilitySearch" type="search" placeholder="달천, 농소, 효문..." autocomplete="off"></label>
+    <div class="favRail" id="favorites"></div>
+    <div class="facilityList" id="facilityList"></div>
+  </section>
+  <section class="surface">
+    <div class="dateLine"><button class="btn subtle" id="prev">‹ 이전</button><input class="input" id="date" type="date"><button class="btn subtle" id="next">다음 ›</button></div>
     <div class="quick"><button class="btn" data-quick="0">오늘</button><button class="btn" data-quick="1">내일</button><button class="btn" data-weekday="6">토요일</button><button class="btn" data-weekday="0">일요일</button></div>
     <div id="topMessage"></div>
   </section>
   <main id="timeline"></main>
-  <section class="panel">
-    <div class="header"><div><h1 style="font-size:20px">주변 축구장 추천</h1><div class="sub">예약 없는 순</div></div><button class="btn primary" id="recommendBtn">추천 보기</button></div>
+  <section class="surface">
+    <div class="sectionHead"><div><div class="sectionTitle">주변 추천</div><p class="sub">선택한 시간에 비어있는 운동장 우선</p></div><button class="btn primary" id="recommendBtn">추천 보기</button></div>
     <div class="grid">
-      <label class="field"><span class="label">지역</span><select id="area"></select></label>
-      <label class="field"><span class="label">날짜</span><input id="recDate" type="date"></label>
-      <label class="field"><span class="label">시작</span><select id="start"></select></label>
-      <label class="field"><span class="label">시간</span><select id="hours"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+      <label><span class="label">지역</span><select id="area"></select></label>
+      <label><span class="label">날짜</span><input class="input" id="recDate" type="date"></label>
+      <label><span class="label">시작</span><select id="start"></select></label>
+      <label><span class="label">시간</span><select id="hours"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
     </div>
     <div id="recommendations"></div>
   </section>
@@ -561,22 +656,25 @@ let facilities = [];
 let selected = 'T0000037';
 let currentData = null;
 let favorites = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+function escapeHtml(value){return String(value ?? '').replace(/[&<>"']/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 function iso(d){return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')}
-function label(f){return !f ? '달천축구장' : ((f.area ? f.area + ' · ' : '') + (f.shortName || f.name || f.id))}
+function displayName(f){return !f ? '달천운동장 인조잔디축구장' : (f.name || f.shortName || f.id)}
+function detailName(f){if(!f)return '북구 · 인조잔디축구장'; const bits=[]; if(f.area)bits.push(f.area); if(f.itemName)bits.push(f.itemName); bits.push(f.id); return bits.join(' · ')}
 function ampm(t){const h=Number(String(t).slice(0,2)); const m=String(t).slice(3,5); const p=h>=12?'오후':'오전'; let h12=h%12; if(!h12) h12=12; return p + ' ' + h12 + ':' + m}
 function group(slots,status){const out=[];let cur=null;(slots||[]).forEach(s=>{if(s.status===status){if(!cur)cur={start:s.start,end:s.end,hours:1};else if(cur.end===s.start){cur.end=s.end;cur.hours++}else{out.push(cur);cur={start:s.start,end:s.end,hours:1}}}else if(cur){out.push(cur);cur=null}});if(cur)out.push(cur);return out}
 function saveFav(){localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites))}
-function renderFacilities(){const sorted=[...facilities].sort((a,b)=>{const af=favorites.includes(a.id), bf=favorites.includes(b.id); if(af!==bf) return af?-1:1; return label(a).localeCompare(label(b),'ko-KR')}); $('facility').innerHTML=sorted.map(f=>'<option value="'+f.id+'">'+(favorites.includes(f.id)?'★ ':'')+label(f)+'</option>').join(''); $('facility').value=selected; const sf=facilities.find(f=>f.id===selected); $('subtitle').textContent=label(sf); $('favorite').textContent=favorites.includes(selected)?'★':'☆'; $('favorite').className=favorites.includes(selected)?'btn star active':'btn star'; $('favorites').innerHTML=favorites.map(id=>facilities.find(f=>f.id===id)).filter(Boolean).map(f=>'<button class="btn chip" data-fav="'+f.id+'">'+(f.shortName||f.name)+'</button>').join('')}
-function blockHtml(blocks, tone, emptyTitle, emptySub, meta){if(!blocks.length)return '<div class="hero '+tone+'"><b>'+emptyTitle+'</b><div class="sub">'+emptySub+'</div></div>';return '<div class="blocks">'+blocks.map(b=>'<div class="block '+tone+'"><b>'+ampm(b.start)+' ~ '+ampm(b.end)+'</b><div class="meta">'+b.hours+'시간 '+meta+'</div></div>').join('')+'</div>'}
-function renderTimeline(){if(!currentData)return; $('source').href=currentData.sourceUrl||'https://crs.ubimc.or.kr/yeyak'; if(currentData.error){$('timeline').innerHTML='<div class="hero bad"><b>조회 불가</b><div class="sub">'+currentData.error+'</div></div>';return} const av=group(currentData.slots,'AVAILABLE'), bk=group(currentData.slots,'BOOKED'); $('timeline').innerHTML='<section class="panel ok"><div class="sectionTitle">가능한 시간</div>'+blockHtml(av,'ok','가능 시간 없음','이 날짜는 예약 가능한 시간이 보이지 않아요','가능')+'</section><section class="panel bad"><div class="sectionTitle">예약된 시간</div>'+blockHtml(bk,'bad','예약 없음','표시된 운영 시간은 모두 사용 가능','예약')+'</section>'}
-async function loadFacilities(){try{const r=await fetch('/api/ulsan/facilities'); const j=await r.json(); facilities=j.facilities||[]; const preferred=favorites.find(id=>facilities.some(f=>f.id===id)); if(!facilities.some(f=>f.id===selected)) selected=preferred || (facilities[0]&&facilities[0].id) || selected; renderFacilities()}catch(e){$('topMessage').innerHTML='<p class="notice">축구장 목록은 기본값으로 표시 중입니다.</p>'; facilities=[{id:'T0000037',shortName:'달천축구장',name:'달천운동장 인조잔디축구장',area:'북구'}]; renderFacilities()}}
-async function loadSlots(){try{$('topMessage').innerHTML='<p class="notice">불러오는 중…</p>'; const qs=new URLSearchParams({date:$('date').value,facilityId:selected}); const r=await fetch('/api/ulsan/sports?'+qs); currentData=await r.json(); $('topMessage').innerHTML=''; renderFacilities(); renderTimeline()}catch(e){$('topMessage').innerHTML='<p class="error">'+e.message+'</p>'}}
+function setMessage(kind,text){$('topMessage').innerHTML=text?'<div class="message '+kind+'">'+escapeHtml(text)+'</div>':''}
+function renderFacilities(){const query=$('facilitySearch').value.trim().toLowerCase(); const sorted=[...facilities].sort((a,b)=>{const af=favorites.includes(a.id),bf=favorites.includes(b.id); if(af!==bf)return af?-1:1; return displayName(a).localeCompare(displayName(b),'ko-KR')}); const visible=sorted.filter(f=>(displayName(f)+' '+detailName(f)).toLowerCase().includes(query)); const sf=facilities.find(f=>f.id===selected); $('subtitle').textContent=displayName(sf); $('favorite').textContent=favorites.includes(selected)?'★':'☆'; $('favorite').className=favorites.includes(selected)?'tool favorite active':'tool favorite'; $('favorites').innerHTML=favorites.map(id=>facilities.find(f=>f.id===id)).filter(Boolean).map(f=>'<button class="btn chip" data-fav="'+escapeHtml(f.id)+'">'+escapeHtml(displayName(f))+'</button>').join(''); $('facilityList').innerHTML=visible.length?visible.map(f=>'<button type="button" class="facilityItem '+(f.id===selected?'selected':'')+'" data-facility="'+escapeHtml(f.id)+'"><span class="facilityText"><b>'+escapeHtml(displayName(f))+'</b><small>'+escapeHtml(detailName(f))+'</small></span><span class="miniStar">'+(favorites.includes(f.id)?'★':'')+'</span></button>').join(''):'<div class="empty">검색 결과가 없습니다</div>'}
+function blockHtml(blocks,tone,emptyTitle,emptySub,meta){if(!blocks.length)return '<div class="empty"><b>'+escapeHtml(emptyTitle)+'</b><span class="meta">'+escapeHtml(emptySub)+'</span></div>';return '<div class="blocks">'+blocks.map(b=>'<div class="block '+tone+'"><b>'+ampm(b.start)+' ~ '+ampm(b.end)+'</b><span class="meta">'+b.hours+'시간 '+meta+'</span></div>').join('')+'</div>'}
+function renderTimeline(){if(!currentData)return; $('source').href=currentData.sourceUrl||'https://crs.ubimc.or.kr/yeyak'; if(currentData.error){$('timeline').innerHTML='<section class="surface badPanel"><div class="sectionTitle">조회 불가</div><p class="sub">'+escapeHtml(currentData.error)+'</p></section>';return} const av=group(currentData.slots,'AVAILABLE'), bk=group(currentData.slots,'BOOKED'); const name=displayName(currentData.facilityInfo); $('timeline').innerHTML='<section class="surface"><div class="summary"><div class="stat"><span>선택 운동장</span><b>'+escapeHtml(name)+'</b><span>'+escapeHtml(currentData.date)+'</span></div><div class="stat"><span>가능</span><b>'+av.length+'</b><span>연속 시간대</span></div><div class="stat"><span>예약됨</span><b>'+bk.length+'</b><span>연속 시간대</span></div></div></section><div class="split"><section class="surface okPanel"><div class="sectionHead"><div class="sectionTitle">가능한 시간</div></div>'+blockHtml(av,'okPanel','가능 시간 없음','이 날짜는 예약 가능한 시간이 보이지 않아요','가능')+'</section><section class="surface badPanel"><div class="sectionHead"><div class="sectionTitle">예약된 시간</div></div>'+blockHtml(bk,'badPanel','예약 없음','표시된 운영 시간은 모두 사용 가능','예약')+'</section></div>'}
+async function loadFacilities(){try{const r=await fetch('/api/ulsan/facilities'); const j=await r.json(); facilities=j.facilities||[]; const preferred=favorites.find(id=>facilities.some(f=>f.id===id)); if(!facilities.some(f=>f.id===selected))selected=preferred||(facilities[0]&&facilities[0].id)||selected; renderFacilities()}catch(e){setMessage('wait','축구장 목록은 기본값으로 표시 중입니다.'); facilities=[{id:'T0000037',name:'달천운동장 인조잔디축구장',shortName:'달천운동장 인조잔디축구장',area:'북구',itemName:'인조잔디축구장'}]; renderFacilities()}}
+async function loadSlots(){try{setMessage('wait','예약 정보를 불러오는 중입니다.'); const qs=new URLSearchParams({date:$('date').value,facilityId:selected}); const r=await fetch('/api/ulsan/sports?'+qs); currentData=await r.json(); setMessage('',''); renderFacilities(); renderTimeline()}catch(e){setMessage('error',e.message)}}
 function updateStartOptions(){const h=Number($('hours').value||2); const max=24-h; $('start').innerHTML=''; for(let i=5;i<=max;i++){const t=String(i).padStart(2,'0')+':00'; const o=document.createElement('option'); o.value=t; o.textContent=ampm(t); $('start').appendChild(o)} if(!$('start').value)$('start').value='19:00'}
 function resultLabel(r){if(r.error)return '조회 실패'; if(r.isFullyAvailable)return '예약 없음'; if(r.bookedSlots===r.requestedSlots)return '전부 예약'; return r.availableSlots+'/'+r.requestedSlots+'시간 가능'}
-async function loadRecommendations(){try{$('recommendations').innerHTML='<p class="notice">추천 조회 중…</p>'; const qs=new URLSearchParams({area:$('area').value,date:$('recDate').value,start:$('start').value,hours:$('hours').value}); const r=await fetch('/api/ulsan/soccer/recommendations?'+qs); const j=await r.json(); $('recommendations').innerHTML='<div class="recList">'+(j.results||[]).map(x=>'<article class="rec '+(x.isFullyAvailable?'best':'')+'"><button class="btn star '+(favorites.includes(x.facility.id)?'active':'')+'" data-star="'+x.facility.id+'">'+(favorites.includes(x.facility.id)?'★':'☆')+'</button><button class="recMain" data-pick="'+x.facility.id+'"><b>'+label(x.facility)+'</b><span class="meta">'+ampm(j.startTime)+'부터 '+j.hours+'시간 · '+resultLabel(x)+'</span></button><span class="pill '+(x.isFullyAvailable?'good':'')+'">'+(x.isFullyAvailable?'추천':resultLabel(x))+'</span></article>').join('')+'</div>'}catch(e){$('recommendations').innerHTML='<p class="error">'+e.message+'</p>'}}
+async function loadRecommendations(){try{$('recommendations').innerHTML='<div class="message wait">추천 조회 중입니다.</div>'; const qs=new URLSearchParams({area:$('area').value,date:$('recDate').value,start:$('start').value,hours:$('hours').value}); const r=await fetch('/api/ulsan/soccer/recommendations?'+qs); const j=await r.json(); $('recommendations').innerHTML='<div class="recList">'+(j.results||[]).map(x=>'<article class="rec '+(x.isFullyAvailable?'best':'')+'"><button class="tool favorite '+(favorites.includes(x.facility.id)?'active':'')+'" data-star="'+escapeHtml(x.facility.id)+'">'+(favorites.includes(x.facility.id)?'★':'☆')+'</button><button class="recMain" data-pick="'+escapeHtml(x.facility.id)+'"><b>'+escapeHtml(displayName(x.facility))+'</b><span class="meta">'+escapeHtml(detailName(x.facility))+' · '+ampm(j.startTime)+'부터 '+j.hours+'시간 · '+resultLabel(x)+'</span></button><span class="pill '+(x.isFullyAvailable?'good':'')+'">'+(x.isFullyAvailable?'추천':resultLabel(x))+'</span></article>').join('')+'</div>'}catch(e){$('recommendations').innerHTML='<div class="message error">'+escapeHtml(e.message)+'</div>'}}
 $('date').value=iso(new Date()); $('recDate').value=$('date').value; AREAS.forEach(a=>{$('area').append(new Option(a,a))}); $('area').value='북구'; updateStartOptions(); $('start').value='19:00';
-$('facility').onchange=()=>{selected=$('facility').value; loadSlots()}; $('favorite').onclick=()=>{favorites=favorites.includes(selected)?favorites.filter(x=>x!==selected):[selected,...favorites]; saveFav(); renderFacilities()};
-$('favorites').onclick=(e)=>{const id=e.target.dataset.fav; if(id){selected=id; loadSlots()}}; $('prev').onclick=()=>{const d=new Date($('date').value+'T00:00:00'); d.setDate(d.getDate()-1); $('date').value=iso(d); loadSlots()}; $('next').onclick=()=>{const d=new Date($('date').value+'T00:00:00'); d.setDate(d.getDate()+1); $('date').value=iso(d); loadSlots()}; $('date').onchange=loadSlots; $('refresh').onclick=loadSlots;
+$('facilitySearch').oninput=renderFacilities; $('facilityList').onclick=(e)=>{const btn=e.target.closest('[data-facility]'); if(btn){selected=btn.dataset.facility; $('facilitySearch').value=''; loadSlots()}}; $('favorite').onclick=()=>{favorites=favorites.includes(selected)?favorites.filter(x=>x!==selected):[selected,...favorites]; saveFav(); renderFacilities()};
+$('favorites').onclick=(e)=>{const id=e.target.closest('[data-fav]')?.dataset.fav; if(id){selected=id; loadSlots()}}; $('prev').onclick=()=>{const d=new Date($('date').value+'T00:00:00'); d.setDate(d.getDate()-1); $('date').value=iso(d); loadSlots()}; $('next').onclick=()=>{const d=new Date($('date').value+'T00:00:00'); d.setDate(d.getDate()+1); $('date').value=iso(d); loadSlots()}; $('date').onchange=loadSlots; $('refresh').onclick=loadSlots;
 document.querySelectorAll('[data-quick]').forEach(b=>b.onclick=()=>{const d=new Date(); d.setDate(d.getDate()+Number(b.dataset.quick)); $('date').value=iso(d); loadSlots()}); document.querySelectorAll('[data-weekday]').forEach(b=>b.onclick=()=>{const d=new Date(); const dow=Number(b.dataset.weekday); const delta=(dow-d.getDay()+7)%7; d.setDate(d.getDate()+delta); $('date').value=iso(d); loadSlots()});
 $('hours').onchange=updateStartOptions; $('recommendBtn').onclick=loadRecommendations; $('recommendations').onclick=(e)=>{const star=e.target.dataset.star; const pick=e.target.closest('[data-pick]')?.dataset.pick; if(star){favorites=favorites.includes(star)?favorites.filter(x=>x!==star):[star,...favorites]; saveFav(); renderFacilities(); loadRecommendations()} if(pick){selected=pick; $('date').value=$('recDate').value; loadSlots(); window.scrollTo({top:0,behavior:'smooth'})}};
 loadFacilities().then(loadSlots);
