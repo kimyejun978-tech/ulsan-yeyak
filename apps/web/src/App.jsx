@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
-const DEFAULT_FACILITY_ID = 'T0000037'
+const DEFAULT_FACILITY_ID = 'junggu:T0000010'
 const FAVORITES_KEY = 'ulsan-soccer-favorites'
 const AREAS = ['중구', '남구', '동구', '북구', '울주군']
 const HOURS = [1, 2, 3, 4]
@@ -18,7 +18,9 @@ function readFavorites() {
   try {
     const raw = window.localStorage.getItem(FAVORITES_KEY)
     const parsed = JSON.parse(raw || '[]')
-    return Array.isArray(parsed) ? parsed.filter(Boolean) : []
+    return Array.isArray(parsed)
+      ? parsed.filter(Boolean).map((id) => (String(id).includes(':') ? id : `bukgu:${id}`))
+      : []
   } catch {
     return []
   }
@@ -113,7 +115,7 @@ export default function App() {
   const [facilityError, setFacilityError] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const [recommendArea, setRecommendArea] = useState('북구')
+  const [recommendArea, setRecommendArea] = useState('중구')
   const [recommendDate, setRecommendDate] = useState(() => toISODate(new Date()))
   const [recommendStart, setRecommendStart] = useState('19:00')
   const [recommendHours, setRecommendHours] = useState(2)
@@ -140,10 +142,10 @@ export default function App() {
       setFacilities([
         {
           id: DEFAULT_FACILITY_ID,
-          itemId: DEFAULT_FACILITY_ID,
-          name: '달천운동장 인조잔디축구장',
-          shortName: '달천축구장',
-          area: '북구'
+          itemId: 'T0000010',
+          name: '중구다목적구장',
+          shortName: '중구다목적구장',
+          area: '중구'
         }
       ])
     }
@@ -562,8 +564,8 @@ export default function App() {
       <div className="madeBy">made by 김예준</div>
 
       <footer className="footer">
-        <a href={data?.sourceUrl || 'https://crs.ubimc.or.kr/yeyak'} target="_blank" rel="noreferrer">
-          원본 사이트 열기
+        <a href={data?.sourceUrl || 'https://www.ulsan.go.kr/'} target="_blank" rel="noreferrer">
+          공식 예약 사이트 열기
         </a>
       </footer>
     </div>

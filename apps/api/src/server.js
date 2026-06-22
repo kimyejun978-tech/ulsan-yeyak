@@ -48,7 +48,7 @@ app.get('/api/ulsan/sports', async (req, reply) => {
     });
   }
 
-  const facilityId = String(req.query?.facilityId || req.query?.itemId || 'T0000037').trim();
+  const facilityId = String(req.query?.facilityId || req.query?.itemId || 'junggu:T0000010').trim();
   const cacheKey = `ulsan-sports:${facilityId}:${date}`;
   const cached = cache.get(cacheKey);
   const now = Date.now();
@@ -79,7 +79,7 @@ app.get('/api/ulsan/soccer/recommendations', async (req, reply) => {
     });
   }
 
-  const area = String(req.query?.area || '북구');
+  const area = String(req.query?.area || '중구');
   const startTime = String(req.query?.start || req.query?.startTime || '19:00');
   const hours = Number(req.query?.hours || 2);
   const cacheKey = `ulsan-soccer-recommend:${area}:${date}:${startTime}:${hours}`;

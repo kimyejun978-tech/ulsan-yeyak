@@ -1,15 +1,9 @@
 import https from 'node:https';
 import Holidays from 'date-holidays';
 
-const BASE_URL = 'https://crs.ubimc.or.kr';
-const AJAX_URL = `${BASE_URL}/yeyak/ajxAgent/ajxRsvExplodTime`;
-const DEFAULT_FACILITY_ID = 'T0000037';
-const DEFAULT_ITEM_TYPE = 'I';
-const DEFAULT_MEM_ID = 'B0001016';
+const DEFAULT_FACILITY_ID = 'junggu:T0000010';
+const DALCHEON_FACILITY_ID = 'bukgu:T0000037';
 const FACILITY_CACHE_TTL_MS = Number(process.env.FACILITY_CACHE_TTL_MS || 6 * 60 * 60 * 1000);
-
-const hd = new Holidays('KR');
-
 const ULSAN_AREAS = ['중구', '남구', '동구', '북구', '울주군'];
 const NEARBY_AREAS = {
   중구: ['중구', '남구', '북구', '동구', '울주군'],
@@ -19,526 +13,378 @@ const NEARBY_AREAS = {
   울주군: ['울주군', '남구', '북구', '중구', '동구']
 };
 
-const SOCCER_KEYWORDS = ['축구', '풋살', '인조잔디'];
-const NON_SOCCER_KEYWORDS = ['야구', '테니스', '배드민턴', '농구', '족구', '게이트볼', '수영', '탁구'];
-
-const SEEDED_FACILITIES = [
-  {
-    id: DEFAULT_FACILITY_ID,
-    itemId: DEFAULT_FACILITY_ID,
-    name: '달천운동장 인조잔디축구장',
-    shortName: '달천축구장',
-    area: '북구',
-    itemType: DEFAULT_ITEM_TYPE,
-    memId: DEFAULT_MEM_ID
+const PROVIDERS = {
+  bukgu: {
+    label: '북구시설관리공단',
+    baseUrl: 'https://crs.ubimc.or.kr',
+    ajaxPath: '/yeyak/ajxAgent/ajxRsvExplodTime',
+    viewPath: '/yeyak/sports_facilities/facility_view',
+    itemType: 'I',
+    defaultOpen: 5,
+    defaultClose: 24
+  },
+  junggu: {
+    label: '중구도시관리공단',
+    baseUrl: 'https://crs.ujcmc.or.kr',
+    ajaxPath: '/ajxAgent/ajxRsvExplodTime.jsp',
+    viewPath: '/sports_facilities/facility_view.jsp',
+    defaultOpen: 7,
+    defaultClose: 18
+  },
+  namgu: {
+    label: '남구도시관리공단',
+    baseUrl: 'https://crs.uncmc.or.kr',
+    ajaxPath: '/ajxAgent/ajxRsvExplodTime.jsp',
+    viewPath: '/sports_facilities/facility_view.jsp',
+    defaultOpen: 6,
+    defaultClose: 22
+  },
+  donggu: {
+    label: '동구공공시설예약',
+    baseUrl: 'https://crs.donggu.ulsan.kr',
+    ajaxPath: '/ajxAgent/ajxRsvExplodTime.jsp',
+    viewPath: '/sports_facilities/facility_view.jsp',
+    defaultOpen: 6,
+    defaultClose: 22
+  },
+  ulju: {
+    label: '울주군시설관리공단',
+    baseUrl: 'https://crs.uljusiseol.or.kr',
+    ajaxPath: '/ajxAgent/ajxRsvExplodTime',
+    viewPath: '/sports_facilities/facility_view',
+    itemType: 'I',
+    defaultOpen: 5,
+    defaultClose: 24
   }
+};
+
+const FACILITY_DEFINITIONS = [
+  ['bukgu', 'T0000064', '효문운동장 인조잔디축구장', '효문운동장', '인조잔디축구장', '북구', 'B0001023'],
+  ['bukgu', 'T0000037', '달천운동장 인조잔디축구장', '달천운동장', '인조잔디축구장', '북구', 'B0001016'],
+  ['bukgu', 'T0000046', '염포운동장 인조잔디축구장', '염포운동장', '인조잔디축구장', '북구', 'B0001018'],
+  ['bukgu', 'T0000044', '양정생활체육공원 인조잔디축구장', '양정생활체육공원', '인조잔디축구장', '북구', 'B0001017'],
+  ['bukgu', 'T0000033', '농소운동장 인조잔디축구장(A)', '농소운동장', '인조잔디축구장(A)', '북구', 'B0001015'],
+  ['bukgu', 'T0000034', '농소운동장 인조잔디축구장(B)', '농소운동장', '인조잔디축구장(B)', '북구', 'B0001015'],
+  ['bukgu', 'T0000040', '상안다목적구장', '상안다목적구장', '축구장', '북구', 'B0001013'],
+  ['bukgu', 'T0000039', '명촌다목적구장', '명촌다목적구장', '축구장', '북구', 'B0001012'],
+  ['bukgu', 'T0000058', '화봉다목적구장', '화봉다목적구장', '축구장', '북구', 'B0001021'],
+  ['bukgu', 'T0000059', '효문다목적구장', '효문다목적구장', '축구장', '북구', 'B0001022'],
+  ['bukgu', 'T0000032', '가람다목적구장', '가람다목적구장', '축구장', '북구', 'B0001011'],
+  ['bukgu', 'T0000056', '중산다목적구장', '중산다목적구장', '축구장', '북구', 'B0001020'],
+  ['bukgu', 'T0000042', '송정다목적구장', '송정다목적구장', '축구장', '북구', 'B0001014'],
+  ['junggu', 'T0000010', '중구다목적구장', '중구다목적구장', '축구장', '중구', 'B0000003', 7, 22],
+  ['junggu', 'T0000009', '함월구민운동장', '함월구민운동장', '축구장', '중구', 'B0000003', 7, 18],
+  ['junggu', 'T0000007', '십리대밭축구장 인조잔디 B구장', '십리대밭축구장', '인조잔디 B구장', '중구', 'B0000003', 7, 18],
+  ['junggu', 'T0000008', '십리대밭축구장 인조잔디 C구장', '십리대밭축구장', '인조잔디 C구장', '중구', 'B0000003', 7, 18],
+  ['namgu', 'T0000219', '선암호수공원축구장', '선암호수공원', '축구장', '남구', 'B0000001'],
+  ['donggu', 'T0000003', '서부시민운동장 인조잔디구장', '서부시민운동장', '인조잔디축구장', '동구', 'B0000001'],
+  ['ulju', 'T0000001', '간절곶인조구장 A', '간절곶스포츠파크', '인조구장 A', '울주군', 'B0000151'],
+  ['ulju', 'T0000002', '간절곶인조구장 B', '간절곶스포츠파크', '인조구장 B', '울주군', 'B0000151'],
+  ['ulju', 'T0000003', '간절곶천연구장', '간절곶스포츠파크', '천연잔디구장', '울주군', 'B0000151'],
+  ['ulju', 'T0000431', '구영운동장', '구영운동장', '축구장', '울주군', 'B0000201'],
+  ['ulju', 'T0000013', '대암인조구장', '대암체육공원', '인조구장', '울주군', 'B0000183'],
+  ['ulju', 'T0000015', '범서인조구장', '범서생활체육공원', '인조구장', '울주군', 'B0000154'],
+  ['ulju', 'T0000018', '삼동인조구장', '삼동면민운동장', '인조구장', '울주군', 'B0000187'],
+  ['ulju', 'T0000025', '상북인조구장', '상북면민운동장', '인조구장', '울주군', 'B0000182'],
+  ['ulju', 'T0000030', '서생인조구장', '서생체육공원', '인조구장', '울주군', 'B0000152'],
+  ['ulju', 'T0000034', '온산인조구장', '온산운동장', '인조구장', '울주군', 'B0000112'],
+  ['ulju', 'T0000040', '온양인조구장', '온양체육공원', '인조구장', '울주군', 'B0000181'],
+  ['ulju', 'T0000048', '웅촌인조구장', '웅촌운동장', '인조구장', '울주군', 'B0000185'],
+  ['ulju', 'T0000051', '작천정운동장', '작천정운동장', '축구장', '울주군', 'B0000190'],
+  ['ulju', 'T0000055', '청량인조구장', '청량운동장', '인조구장', '울주군', 'B0000186'],
+  ['ulju', 'T0000059', '화랑인조구장', '화랑체육공원', '인조구장', '울주군', 'B0000155']
 ];
 
-const FACILITY_LIST_URLS = [
-  `${BASE_URL}/yeyak/sports_facilities/facility_list?ITEM_TYPE=I&selItemKind=`,
-  `${BASE_URL}/yeyak/sports_facilities/facility_list?ITEM_TYPE=I`,
-  `${BASE_URL}/yeyak/sports_facilities?ITEM_TYPE=I`
-];
-
+const hd = new Holidays('KR');
 let facilityCache = null;
 let facilityCacheExpiresAt = 0;
 
-function requestText(urlInput, { method = 'GET', body = null, headers = {} } = {}) {
-  const url = new URL(urlInput);
-  const requestHeaders = {
-    Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
-    'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    ...headers
+function officialSourceUrl(providerKey, itemId, memId) {
+  const provider = PROVIDERS[providerKey];
+  const params = new URLSearchParams({ selItemKind: 'FTB', mem_id: memId, item_id: itemId });
+  if (provider.itemType) params.set('ITEM_TYPE', provider.itemType);
+  return `${provider.baseUrl}${provider.viewPath}?${params.toString()}`;
+}
+
+function createFacility(definition) {
+  const [provider, itemId, name, place, itemName, area, memId, openHour, closeHour] = definition;
+  const providerInfo = PROVIDERS[provider];
+  return {
+    id: `${provider}:${itemId}`,
+    itemId,
+    name,
+    shortName: name,
+    place,
+    itemName,
+    area,
+    memId,
+    provider,
+    providerName: providerInfo.label,
+    openHour: openHour ?? providerInfo.defaultOpen,
+    closeHour: closeHour ?? providerInfo.defaultClose,
+    sourceUrl: officialSourceUrl(provider, itemId, memId)
   };
-
-  if (body != null && requestHeaders['Content-Length'] == null) {
-    requestHeaders['Content-Length'] = Buffer.byteLength(body);
-  }
-
-  /** @type {https.RequestOptions} */
-  const options = {
-    protocol: url.protocol,
-    hostname: url.hostname,
-    port: url.port || 443,
-    path: `${url.pathname}${url.search}`,
-    method,
-    headers: requestHeaders,
-    // The upstream TLS chain has been inconsistent in some Node runtimes.
-    rejectUnauthorized: process.env.UBIMC_REJECT_UNAUTHORIZED === '1'
-  };
-
-  return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`Upstream HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
-          return;
-        }
-        resolve(data);
-      });
-    });
-
-    req.on('error', reject);
-    req.setTimeout(45000, () => {
-      req.destroy(new Error('Timeout'));
-    });
-
-    if (body != null) req.write(body);
-    req.end();
-  });
 }
 
-/**
- * Fetch booked hours for a date and facility.
- * @param {string} selDate - YYYYMMDD
- * @param {{ itemId:string, itemType?:string, memId?:string }} facility
- * @returns {Promise<{ chk_result: string, hhhlist: string, msg: string }>}
- */
-async function postExplodeTime(selDate, facility) {
-  const body = new URLSearchParams({ selDate, item_id: facility.itemId }).toString();
-  const text = await requestText(AJAX_URL, {
-    method: 'POST',
-    body,
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      Referer: facilitySourceUrl(facility)
-    }
-  });
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`Failed to parse JSON: ${text.slice(0, 200)}`);
-  }
-}
-
-function isoToSelDate(dateISO) {
-  return String(dateISO).replaceAll('-', '');
-}
-
-const HOLIDAYS_2026 = {
-  '2026-01-01': { name: '신정', type: 'public' },
-  '2026-02-16': { name: '설날(연휴)', type: 'public' },
-  '2026-02-17': { name: '설날', type: 'public' },
-  '2026-02-18': { name: '설날(연휴)', type: 'public' },
-  '2026-03-01': { name: '삼일절', type: 'public' },
-  '2026-03-02': { name: '대체공휴일', type: 'substitute', of: '삼일절' },
-  '2026-05-05': { name: '어린이날', type: 'public' },
-  '2026-05-24': { name: '부처님오신날', type: 'public' },
-  '2026-05-25': { name: '대체공휴일', type: 'substitute', of: '부처님오신날' },
-  '2026-06-03': { name: '지방선거일', type: 'public' },
-  '2026-06-06': { name: '현충일', type: 'public' },
-  '2026-08-15': { name: '광복절', type: 'public' },
-  '2026-08-17': { name: '대체공휴일', type: 'substitute', of: '광복절' },
-  '2026-09-24': { name: '추석(연휴)', type: 'public' },
-  '2026-09-25': { name: '추석', type: 'public' },
-  '2026-09-26': { name: '추석(연휴)', type: 'public' },
-  '2026-10-03': { name: '개천절', type: 'public' },
-  '2026-10-05': { name: '대체공휴일', type: 'substitute', of: '개천절' },
-  '2026-10-09': { name: '한글날', type: 'public' },
-  '2026-12-25': { name: '성탄절', type: 'public' }
-};
-
-function holidayInfo(dateISO) {
-  if (String(dateISO).startsWith('2026-')) {
-    const h = HOLIDAYS_2026[dateISO];
-    if (h) return { isHoliday: true, ...h };
-    return { isHoliday: false, name: null, type: null };
-  }
-
-  const d = new Date(dateISO + 'T00:00:00');
-  const hit = hd.isHoliday(d);
-  if (!hit) return { isHoliday: false, name: null, type: null };
-  const arr = Array.isArray(hit) ? hit : [hit];
-  const name = arr[0]?.name || arr[0]?.localName || '공휴일';
-  return { isHoliday: true, name, type: 'public' };
-}
-
-function pad2(n) {
-  return String(n).padStart(2, '0');
-}
-
-function makeSlots(bookedHours) {
-  const slots = [];
-  for (let h = 5; h <= 23; h++) {
-    const start = `${pad2(h)}:00`;
-    const end = `${pad2(h + 1)}:00`;
-    const isBooked = bookedHours.has(h);
-    slots.push({
-      hour: h,
-      start,
-      end,
-      status: isBooked ? 'BOOKED' : 'AVAILABLE',
-      label: isBooked ? '예약불가' : '예약가능',
-      raw: `${start} ~ ${end} (${isBooked ? '예약불가' : '예약가능'})`
-    });
-  }
-  return slots;
-}
-
-function htmlDecode(value) {
-  return String(value)
-    .replaceAll('&amp;', '&')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'")
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>');
-}
-
-function cleanText(value) {
-  return htmlDecode(value)
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function inferArea(name) {
-  for (const area of ULSAN_AREAS) {
-    if (String(name).includes(area)) return area;
-  }
-  return '';
-}
-
-function isSoccerFacility(facility) {
-  const text = `${facility.name || ''} ${facility.shortName || ''}`.replace(/\s+/g, '');
-  if (!text) return false;
-  if (NON_SOCCER_KEYWORDS.some((keyword) => text.includes(keyword))) return false;
-  return SOCCER_KEYWORDS.some((keyword) => text.includes(keyword));
-}
-
-function shortFacilityName(name, itemId) {
-  const clean = cleanText(name);
-  if (!clean) return `울산 축구장 ${itemId}`;
-  return clean
-    .replace(/\s*예약\s*/g, ' ')
-    .replace(/\s*상세보기\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function facilitySourceUrl(facility) {
-  if (facility.sourceUrl) return facility.sourceUrl;
-
-  const params = new URLSearchParams({
-    ITEM_TYPE: facility.itemType || DEFAULT_ITEM_TYPE,
-    selItemKind: '',
-    mem_id: facility.memId || DEFAULT_MEM_ID,
-    item_id: facility.itemId
-  });
-  return `${BASE_URL}/yeyak/sports_facilities/facility_view?${params.toString()}`;
-}
-
-function facilityFromUrl(rawUrl, label = '') {
-  try {
-    const url = new URL(htmlDecode(rawUrl), BASE_URL);
-    const itemId = url.searchParams.get('item_id');
-    if (!itemId || !/^T\d+$/i.test(itemId)) return null;
-
-    const name = shortFacilityName(label, itemId);
-    return {
-      id: itemId,
-      itemId,
-      name,
-      shortName: name,
-      area: inferArea(name),
-      itemType: url.searchParams.get('ITEM_TYPE') || DEFAULT_ITEM_TYPE,
-      memId: url.searchParams.get('mem_id') || DEFAULT_MEM_ID,
-      sourceUrl: url.toString()
-    };
-  } catch {
-    return null;
-  }
-}
-
-function extractFacilities(html) {
-  const facilities = [];
-  const push = (facility) => {
-    if (facility) facilities.push(facility);
-  };
-
-  const anchorRe = /<a\b[^>]*href=["']([^"']*facility_view\?[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  for (const match of html.matchAll(anchorRe)) {
-    push(facilityFromUrl(match[1], match[2]));
-  }
-
-  const hrefRe = /(?:href|data-url)=["']([^"']*facility_view\?[^"']*)["']/gi;
-  for (const match of html.matchAll(hrefRe)) {
-    push(facilityFromUrl(match[1]));
-  }
-
-  const bareRe = /sports_facilities\/facility_view\?[^"'<>\\\s)]+/gi;
-  for (const match of html.matchAll(bareRe)) {
-    push(facilityFromUrl(match[0]));
-  }
-
-  return facilities;
-}
-
-function extractFacilityListUrls(html) {
-  const urls = [];
-  const hrefRe = /(?:href|data-url)=["']([^"']*sports_facilities\/facility_list[^"']*)["']/gi;
-  for (const match of html.matchAll(hrefRe)) {
-    try {
-      const url = new URL(htmlDecode(match[1]), BASE_URL);
-      if ((url.searchParams.get('ITEM_TYPE') || DEFAULT_ITEM_TYPE) === DEFAULT_ITEM_TYPE) {
-        urls.push(url.toString());
-      }
-    } catch {
-      // ignore malformed links
-    }
-  }
-  return urls;
-}
-
-function mergeFacilities(facilities) {
-  const byId = new Map();
-  for (const facility of facilities) {
-    if (!facility?.itemId) continue;
-    const previous = byId.get(facility.itemId);
-    const name = facility.name || previous?.name || `울산 축구장 ${facility.itemId}`;
-    byId.set(facility.itemId, {
-      ...(previous || {}),
-      ...facility,
-      id: facility.itemId,
-      name,
-      shortName: facility.shortName || previous?.shortName || name,
-      area: facility.area || previous?.area || inferArea(name)
-    });
-  }
-
-  return [...byId.values()]
-    .filter(isSoccerFacility)
-    .sort((a, b) => {
-      const area = String(a.area || '').localeCompare(String(b.area || ''), 'ko-KR');
-      if (area !== 0) return area;
-      return String(a.shortName || a.name).localeCompare(String(b.shortName || b.name), 'ko-KR');
-    });
-}
-
-async function loadFacilityCatalog() {
+function loadFacilityCatalog() {
   const now = Date.now();
   if (facilityCache && facilityCacheExpiresAt > now) return facilityCache;
-
-  const discovered = [];
-  const errors = [];
-  const visited = new Set();
-  const queue = [...FACILITY_LIST_URLS];
-
-  while (queue.length && visited.size < 25) {
-    const url = queue.shift();
-    if (!url || visited.has(url)) continue;
-    visited.add(url);
-
-    try {
-      const html = await requestText(url);
-      discovered.push(...extractFacilities(html));
-      for (const nextUrl of extractFacilityListUrls(html)) {
-        if (!visited.has(nextUrl) && !queue.includes(nextUrl)) queue.push(nextUrl);
-      }
-    } catch (error) {
-      errors.push(`${url}: ${error.message}`);
-    }
-  }
-
-  const facilities = mergeFacilities([...SEEDED_FACILITIES, ...discovered]);
+  const facilities = FACILITY_DEFINITIONS.map(createFacility).sort((a, b) => {
+    const areaOrder = ULSAN_AREAS.indexOf(a.area) - ULSAN_AREAS.indexOf(b.area);
+    return areaOrder || a.name.localeCompare(b.name, 'ko-KR');
+  });
   facilityCache = {
     facilities,
     areas: ULSAN_AREAS,
-    sourceUrl: FACILITY_LIST_URLS[0],
-    source: discovered.length ? 'official-list' : 'seeded-fallback',
+    countsByArea: Object.fromEntries(
+      ULSAN_AREAS.map((area) => [area, facilities.filter((facility) => facility.area === area).length])
+    ),
+    sourceUrl: 'https://www.ulsan.go.kr/',
+    source: 'official-municipal-reservation-systems',
+    scope: '울산광역시 전체',
     filter: 'soccer-only',
-    errors,
+    errors: [],
     updatedAt: new Date().toISOString()
   };
   facilityCacheExpiresAt = now + FACILITY_CACHE_TTL_MS;
   return facilityCache;
 }
 
-function normalizeFacilityId(facilityId) {
-  const id = String(facilityId || DEFAULT_FACILITY_ID).trim();
-  if (id === 'dalcheon-soccer') return DEFAULT_FACILITY_ID;
-  return id || DEFAULT_FACILITY_ID;
-}
-
-async function resolveFacility(facilityId) {
-  const id = normalizeFacilityId(facilityId);
-  const catalog = await loadFacilityCatalog();
-  const known = catalog.facilities.find((facility) => facility.id === id || facility.itemId === id);
-  if (known) return known;
-
-  if (/^T\d+$/i.test(id)) {
-    return {
-      id,
-      itemId: id,
-      name: `울산 축구장 ${id}`,
-      shortName: `울산 축구장 ${id}`,
-      area: '',
-      itemType: DEFAULT_ITEM_TYPE,
-      memId: DEFAULT_MEM_ID
-    };
+function requestText(urlInput, { body, referer } = {}) {
+  const url = new URL(urlInput);
+  const headers = {
+    Accept: 'application/json,text/html;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36',
+    'X-Requested-With': 'XMLHttpRequest'
+  };
+  if (body) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+    headers['Content-Length'] = Buffer.byteLength(body);
+  }
+  if (referer) {
+    headers.Referer = referer;
+    headers.Origin = new URL(referer).origin;
   }
 
-  throw new Error(`Unknown facilityId: ${facilityId}`);
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: `${url.pathname}${url.search}`,
+        method: body ? 'POST' : 'GET',
+        headers,
+        rejectUnauthorized: process.env.ULSAN_REJECT_UNAUTHORIZED === '1'
+      },
+      (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`Upstream HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+          } else {
+            resolve(data);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(45000, () => req.destroy(new Error('Timeout')));
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
-function normalizeArea(area) {
-  const value = String(area || '').trim();
-  return ULSAN_AREAS.includes(value) ? value : '북구';
+async function postExplodeTime(dateISO, facility) {
+  const provider = PROVIDERS[facility.provider];
+  const body = new URLSearchParams({
+    selDate: dateISO.replaceAll('-', ''),
+    item_id: facility.itemId
+  }).toString();
+  const endpoint = `${provider.baseUrl}${provider.ajaxPath}`;
+  const request = () => facility.provider === 'namgu'
+    ? requestText(`${endpoint}?${body}`, { referer: facility.sourceUrl })
+    : requestText(endpoint, { body, referer: facility.sourceUrl });
+  let source;
+  try {
+    source = await request();
+  } catch (error) {
+    if (!/Upstream HTTP 5\d\d/.test(error.message || '')) throw error;
+    source = await request();
+  }
+  const payload = JSON.parse(source);
+  return Array.isArray(payload) ? payload[0] || {} : payload;
 }
 
-function normalizeTime(time, hours = 1) {
-  const value = String(time || '19:00').trim();
-  const match = /^(\d{1,2}):?(\d{2})?$/.exec(value);
-  if (!match) return '19:00';
-  const maxStart = Math.max(5, 24 - hours);
-  const hour = Math.max(5, Math.min(maxStart, Number(match[1])));
-  return `${pad2(hour)}:00`;
+function resolveFacility(facilityId) {
+  const requested = String(facilityId || DEFAULT_FACILITY_ID).trim();
+  const id = requested === 'dalcheon-soccer' ? DALCHEON_FACILITY_ID : requested;
+  const catalog = loadFacilityCatalog();
+  const facility = catalog.facilities.find(
+    (candidate) => candidate.id === id || (candidate.provider === 'bukgu' && candidate.itemId === id)
+  );
+  if (!facility) throw new Error(`Unknown facilityId: ${facilityId}`);
+  return facility;
 }
 
-function normalizeHours(hours) {
-  const value = Number(hours || 2);
-  if (!Number.isFinite(value)) return 2;
-  return Math.max(1, Math.min(4, Math.trunc(value)));
+function holidayInfo(dateISO) {
+  const hit = hd.isHoliday(new Date(`${dateISO}T00:00:00`));
+  if (!hit) return { isHoliday: false, name: null, type: null };
+  const list = Array.isArray(hit) ? hit : [hit];
+  return { isHoliday: true, name: list[0]?.name || list[0]?.localName || '공휴일', type: 'public' };
 }
 
-function requestedHours(startTime, hours) {
-  const startHour = Number(startTime.slice(0, 2));
-  return Array.from({ length: hours }, (_, index) => startHour + index).filter((hour) => hour >= 5 && hour <= 23);
+function operatingHours(facility, dateISO) {
+  if (facility.provider === 'namgu' && facility.itemId === 'T0000219') {
+    const month = Number(dateISO.slice(5, 7));
+    if ([1, 2, 3, 10, 11, 12].includes(month)) return { openHour: 8, closeHour: 22 };
+  }
+  return { openHour: facility.openHour, closeHour: facility.closeHour };
 }
 
-function recommendationScore(slots, hours) {
-  const targetSlots = slots.filter((slot) => hours.includes(slot.hour));
-  const availableSlots = targetSlots.filter((slot) => slot.status === 'AVAILABLE');
-  const bookedSlots = targetSlots.filter((slot) => slot.status === 'BOOKED');
-  return {
-    requestedHours: hours,
-    requestedSlots: targetSlots.length,
-    availableSlots: availableSlots.length,
-    bookedSlots: bookedSlots.length,
-    isFullyAvailable: targetSlots.length > 0 && bookedSlots.length === 0,
-    unavailableSlots: bookedSlots.map((slot) => `${slot.start}-${slot.end}`)
-  };
+function pad2(value) {
+  return String(value).padStart(2, '0');
 }
 
-function areaRank(selectedArea, facilityArea) {
-  const rank = NEARBY_AREAS[selectedArea] || NEARBY_AREAS.북구;
-  const index = rank.indexOf(facilityArea);
-  return index === -1 ? rank.length : index;
+function makeSlots(bookedHours, facility, dateISO) {
+  const { openHour, closeHour } = operatingHours(facility, dateISO);
+  return Array.from({ length: closeHour - openHour }, (_, index) => {
+    const hour = openHour + index;
+    const booked = bookedHours.has(hour);
+    return {
+      hour,
+      start: `${pad2(hour)}:00`,
+      end: `${pad2(hour + 1)}:00`,
+      status: booked ? 'BOOKED' : 'AVAILABLE',
+      label: booked ? '예약불가' : '예약가능'
+    };
+  });
 }
 
 export async function fetchUlsanFacilities() {
   return loadFacilityCatalog();
 }
 
-/**
- * @param {string} dateISO - YYYY-MM-DD
- * @param {string} facilityId
- */
 export async function fetchUlsanFacilitySlots(dateISO, facilityId = DEFAULT_FACILITY_ID) {
-  const selDate = isoToSelDate(dateISO);
-  const facility = await resolveFacility(facilityId);
+  const facility = resolveFacility(facilityId);
+  const raw = await postExplodeTime(dateISO, facility);
   const holiday = holidayInfo(dateISO);
-
-  const res = await postExplodeTime(selDate, facility);
-
-  if (res?.chk_result !== 'OK' && res?.chk_result !== 'NODATA') {
+  if (raw?.chk_result !== 'OK' && raw?.chk_result !== 'NODATA') {
     return {
       facility: facility.id,
       facilityName: facility.name,
       facilityInfo: facility,
       date: dateISO,
-      sourceUrl: facilitySourceUrl(facility),
+      sourceUrl: facility.sourceUrl,
       slots: [],
       rawRowCount: 0,
       holiday,
-      error: res?.msg || '공휴일/휴무일 등으로 조회가 제한되었어요.',
-      note: 'OFFICIAL_BLOCK',
-      msg: res?.msg || ''
+      error: raw?.msg || '공식 예약 시스템에서 조회를 제한했습니다.',
+      msg: raw?.msg || ''
     };
   }
-
   const bookedHours = new Set(
-    String(res.hhhlist || '')
+    String(raw.hhhlist || '')
       .split(',')
-      .map((x) => x.trim())
-      .filter(Boolean)
-      .map((x) => Number(x))
-      .filter((n) => Number.isFinite(n))
+      .map((value) => Number(value.trim()))
+      .filter(Number.isFinite)
   );
-
-  const slots = makeSlots(bookedHours);
-  const allBooked = slots.length > 0 && slots.every((s) => s.status === 'BOOKED');
-
+  const slots = makeSlots(bookedHours, facility, dateISO);
   return {
     facility: facility.id,
     facilityName: facility.name,
     facilityInfo: facility,
     date: dateISO,
-    sourceUrl: facilitySourceUrl(facility),
+    sourceUrl: facility.sourceUrl,
     slots,
     rawRowCount: slots.length,
     holiday,
-    allBooked,
-    bookedHoursCount: bookedHours.size,
+    allBooked: slots.length > 0 && slots.every((slot) => slot.status === 'BOOKED'),
+    bookedHoursCount: slots.filter((slot) => slot.status === 'BOOKED').length,
     availableHoursCount: slots.filter((slot) => slot.status === 'AVAILABLE').length,
-    msg: res?.msg || ''
+    msg: raw?.msg || ''
   };
 }
 
-/**
- * @param {{ area?:string, dateISO:string, startTime?:string, hours?:number, limit?:number }} options
- */
-export async function recommendSoccerFacilities(options) {
-  const area = normalizeArea(options.area);
-  const hours = normalizeHours(options.hours);
-  const startTime = normalizeTime(options.startTime, hours);
-  const targetHours = requestedHours(startTime, hours);
-  const limit = Math.max(1, Math.min(30, Number(options.limit || 12)));
-  const catalog = await loadFacilityCatalog();
-  const rankedAreas = NEARBY_AREAS[area] || NEARBY_AREAS.북구;
-  const candidates = catalog.facilities
-    .filter((facility) => !facility.area || rankedAreas.includes(facility.area))
-    .sort((a, b) => areaRank(area, a.area) - areaRank(area, b.area));
+function normalizeArea(area) {
+  return ULSAN_AREAS.includes(String(area || '').trim()) ? String(area).trim() : '중구';
+}
 
-  const results = [];
-  for (const facility of candidates.slice(0, limit)) {
-    try {
-      const data = await fetchUlsanFacilitySlots(options.dateISO, facility.id);
-      const score = recommendationScore(data.slots, targetHours);
-      results.push({
-        facility,
-        date: options.dateISO,
-        startTime,
-        hours,
-        areaRank: areaRank(area, facility.area),
-        sourceUrl: data.sourceUrl,
-        error: data.error || null,
-        ...score
-      });
-    } catch (error) {
-      results.push({
-        facility,
-        date: options.dateISO,
-        startTime,
-        hours,
-        areaRank: areaRank(area, facility.area),
-        error: error.message || '조회 실패',
-        requestedHours: targetHours,
-        requestedSlots: targetHours.length,
-        availableSlots: 0,
-        bookedSlots: targetHours.length,
-        isFullyAvailable: false,
-        unavailableSlots: []
-      });
-    }
-  }
+function normalizeHours(hours) {
+  const value = Number(hours || 2);
+  return Number.isFinite(value) ? Math.max(1, Math.min(4, Math.trunc(value))) : 2;
+}
 
+function normalizeTime(time, hours) {
+  const match = /^(\d{1,2}):?(\d{2})?$/.exec(String(time || '19:00').trim());
+  if (!match) return '19:00';
+  return `${pad2(Math.max(5, Math.min(24 - hours, Number(match[1]))))}:00`;
+}
+
+function areaRank(selectedArea, facilityArea) {
+  const rank = NEARBY_AREAS[selectedArea];
+  const index = rank.indexOf(facilityArea);
+  return index === -1 ? rank.length : index;
+}
+
+function scoreSlots(slots, requestedHours) {
+  const requested = slots.filter((slot) => requestedHours.includes(slot.hour));
+  const booked = requested.filter((slot) => slot.status === 'BOOKED');
+  return {
+    requestedHours,
+    requestedSlots: requested.length,
+    availableSlots: requested.length - booked.length,
+    bookedSlots: booked.length,
+    isFullyAvailable: requested.length === requestedHours.length && booked.length === 0,
+    unavailableSlots: booked.map((slot) => `${slot.start}-${slot.end}`)
+  };
+}
+
+export async function recommendSoccerFacilities({ area, dateISO, startTime, hours }) {
+  const selectedArea = normalizeArea(area);
+  const duration = normalizeHours(hours);
+  const start = normalizeTime(startTime, duration);
+  const firstHour = Number(start.slice(0, 2));
+  const requestedHours = Array.from({ length: duration }, (_, index) => firstHour + index);
+  const candidates = loadFacilityCatalog().facilities.sort(
+    (a, b) => areaRank(selectedArea, a.area) - areaRank(selectedArea, b.area)
+  );
+  const results = await Promise.all(
+    candidates.map(async (facility) => {
+      try {
+        const data = await fetchUlsanFacilitySlots(dateISO, facility.id);
+        return {
+          facility,
+          date: dateISO,
+          startTime: start,
+          hours: duration,
+          areaRank: areaRank(selectedArea, facility.area),
+          sourceUrl: facility.sourceUrl,
+          error: data.error || null,
+          ...scoreSlots(data.slots, requestedHours)
+        };
+      } catch (error) {
+        return {
+          facility,
+          date: dateISO,
+          startTime: start,
+          hours: duration,
+          areaRank: areaRank(selectedArea, facility.area),
+          sourceUrl: facility.sourceUrl,
+          error: error.message || '조회 실패',
+          requestedHours,
+          requestedSlots: requestedHours.length,
+          availableSlots: 0,
+          bookedSlots: requestedHours.length,
+          isFullyAvailable: false,
+          unavailableSlots: []
+        };
+      }
+    })
+  );
   results.sort((a, b) => {
     if (a.error && !b.error) return 1;
     if (!a.error && b.error) return -1;
@@ -546,18 +392,14 @@ export async function recommendSoccerFacilities(options) {
     if (a.bookedSlots !== b.bookedSlots) return a.bookedSlots - b.bookedSlots;
     if (a.availableSlots !== b.availableSlots) return b.availableSlots - a.availableSlots;
     if (a.areaRank !== b.areaRank) return a.areaRank - b.areaRank;
-    return String(a.facility.shortName || a.facility.name).localeCompare(
-      String(b.facility.shortName || b.facility.name),
-      'ko-KR'
-    );
+    return a.facility.name.localeCompare(b.facility.name, 'ko-KR');
   });
-
   return {
-    area,
-    date: options.dateISO,
-    startTime,
-    hours,
-    requestedHours: targetHours,
+    area: selectedArea,
+    date: dateISO,
+    startTime: start,
+    hours: duration,
+    requestedHours,
     facilitiesChecked: results.length,
     results,
     updatedAt: new Date().toISOString()
@@ -565,5 +407,5 @@ export async function recommendSoccerFacilities(options) {
 }
 
 export async function fetchDalcheonSoccerSlots(dateISO) {
-  return fetchUlsanFacilitySlots(dateISO, DEFAULT_FACILITY_ID);
+  return fetchUlsanFacilitySlots(dateISO, DALCHEON_FACILITY_ID);
 }
