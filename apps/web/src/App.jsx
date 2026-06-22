@@ -245,7 +245,6 @@ export default function App() {
 
   const availableBlocks = useMemo(() => groupSlots(data?.slots, 'AVAILABLE'), [data])
   const bookedBlocks = useMemo(() => groupSlots(data?.slots, 'BOOKED'), [data])
-  const selectedIsFavorite = favorites.includes(facilityId)
   const recommendTimeOptions = useMemo(() => {
     const maxStart = 24 - recommendHours
     return TIME_OPTIONS.filter((time) => Number(time.slice(0, 2)) <= maxStart)
@@ -323,14 +322,6 @@ export default function App() {
               ))}
             </select>
           </label>
-          <button
-            className={selectedIsFavorite ? 'iconBtn active' : 'iconBtn'}
-            onClick={() => toggleFavorite(facilityId)}
-            aria-label={selectedIsFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
-            title={selectedIsFavorite ? '즐겨찾기 해제' : '즐겨찾기 추가'}
-          >
-            {selectedIsFavorite ? '★' : '☆'}
-          </button>
         </div>
 
         {favoriteFacilities.length > 0 && (
