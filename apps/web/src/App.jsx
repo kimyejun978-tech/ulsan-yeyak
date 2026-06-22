@@ -6,6 +6,26 @@ const FAVORITES_KEY = 'ulsan-soccer-favorites'
 const AREAS = ['중구', '남구', '동구', '북구', '울주군']
 const HOURS = [1, 2, 3, 4]
 const TIME_OPTIONS = Array.from({ length: 19 }, (_, index) => `${String(index + 5).padStart(2, '0')}:00`)
+const responseCache = new Map()
+const pendingRequests = new Map()
+
+async function fetchJson(url, ttl = 30000) {
+  const cached = responseCache.get(url)
+  if (cached && Date.now() - cached.savedAt < ttl) return cached.data
+  if (pendingRequests.has(url)) return pendingRequests.get(url)
+
+  const request = fetch(url)
+    .then(async (response) => {
+      const data = await response.json()
+      if (!response.ok) throw new Error(data?.message || `API error: ${response.status}`)
+      responseCache.set(url, { data, savedAt: Date.now() })
+      return data
+    })
+    .finally(() => pendingRequests.delete(url))
+
+  pendingRequests.set(url, request)
+  return request
+}
 
 function toISODate(d) {
   const yyyy = d.getFullYear()
@@ -127,9 +147,7 @@ export default function App() {
     setFacilityError(null)
     try {
       const base = import.meta.env.VITE_API_BASE || ''
-      const res = await fetch(`${base}/api/ulsan/facilities`)
-      if (!res.ok) throw new Error(`시설 목록 오류: ${res.status}`)
-      const json = await res.json()
+      const json = await fetchJson(`${base}/api/ulsan/facilities`, 60 * 60 * 1000)
       const list = Array.isArray(json?.facilities) ? json.facilities : []
       setFacilities(list)
 
@@ -157,9 +175,7 @@ export default function App() {
     try {
       const base = import.meta.env.VITE_API_BASE || ''
       const params = new URLSearchParams({ date, facilityId })
-      const res = await fetch(`${base}/api/ulsan/sports?${params.toString()}`)
-      if (!res.ok) throw new Error(`API error: ${res.status}`)
-      const json = await res.json()
+      const json = await fetchJson(`${base}/api/ulsan/sports?${params.toString()}`, 30000)
       setData(json)
     } catch (e) {
       setError(String(e?.message || e))
@@ -180,9 +196,7 @@ export default function App() {
         start: recommendStart,
         hours: String(recommendHours)
       })
-      const res = await fetch(`${base}/api/ulsan/soccer/recommendations?${params.toString()}`)
-      if (!res.ok) throw new Error(`추천 조회 오류: ${res.status}`)
-      const json = await res.json()
+      const json = await fetchJson(`${base}/api/ulsan/soccer/recommendations?${params.toString()}`, 60000)
       setRecommendations(json)
     } catch (e) {
       setRecommendError(String(e?.message || e))

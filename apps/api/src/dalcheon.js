@@ -4,6 +4,8 @@ import Holidays from 'date-holidays';
 const DEFAULT_FACILITY_ID = 'junggu:T0000010';
 const DALCHEON_FACILITY_ID = 'bukgu:T0000037';
 const FACILITY_CACHE_TTL_MS = Number(process.env.FACILITY_CACHE_TTL_MS || 6 * 60 * 60 * 1000);
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 3000);
+const MAX_RECOMMENDATION_CANDIDATES = 12;
 const ULSAN_AREAS = ['중구', '남구', '동구', '북구', '울주군'];
 const NEARBY_AREAS = {
   중구: ['중구', '남구', '북구', '동구', '울주군'],
@@ -192,7 +194,7 @@ function requestText(urlInput, { body, referer } = {}) {
       }
     );
     req.on('error', reject);
-    req.setTimeout(45000, () => req.destroy(new Error('Timeout')));
+    req.setTimeout(UPSTREAM_TIMEOUT_MS, () => req.destroy(new Error('공식 예약 서버 응답 시간 초과')));
     if (body) req.write(body);
     req.end();
   });
@@ -351,7 +353,7 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
   const requestedHours = Array.from({ length: duration }, (_, index) => firstHour + index);
   const candidates = loadFacilityCatalog().facilities.sort(
     (a, b) => areaRank(selectedArea, a.area) - areaRank(selectedArea, b.area)
-  );
+  ).slice(0, MAX_RECOMMENDATION_CANDIDATES);
   const results = await Promise.all(
     candidates.map(async (facility) => {
       try {
