@@ -5,7 +5,8 @@ const SLOT_CACHE_TTL_MS = 60 * 1000;
 const SLOT_STALE_TTL_MS = 6 * 60 * 60 * 1000;
 const RECOMMEND_CACHE_TTL_MS = 90 * 1000;
 const RECOMMEND_STALE_TTL_MS = 30 * 60 * 1000;
-const UPSTREAM_TIMEOUT_MS = 3000;
+const UPSTREAM_TIMEOUT_MS = 6500;
+const STALE_FALLBACK_DELAY_MS = 1800;
 const MAX_RECOMMENDATION_CANDIDATES = 12;
 const ULSAN_AREAS = ['중구', '남구', '동구', '북구', '울주군'];
 const NEARBY_AREAS = {
@@ -835,7 +836,7 @@ async function cached(key, loader, options = {}) {
     if (edgeHit.expiresAt > now) return edgeHit.value;
   }
 
-  return Promise.resolve(loader()).then(async (value) => {
+  const saveLoadedValue = async (value) => {
     const savedAt = Date.now();
     const entry = {
       value,
@@ -846,7 +847,26 @@ async function cached(key, loader, options = {}) {
     responseCache.set(key, entry);
     await writeEdgeCache(key, entry);
     return value;
-  }).catch(async (error) => {
+  };
+
+  const loadFresh = Promise.resolve(loader()).then(saveLoadedValue);
+
+  if (hit?.value && hit.staleExpiresAt > now) {
+    return Promise.race([
+      loadFresh,
+      new Promise((resolve) => setTimeout(() => {
+        resolve(staleValue(hit.value, new Error('최신 확인이 늦어 캐시 결과를 먼저 표시합니다.')));
+      }, STALE_FALLBACK_DELAY_MS))
+    ]).catch(async (error) => {
+      const fallback = hit || await readEdgeCache(key);
+      if (fallback?.value && fallback.staleExpiresAt > Date.now()) {
+        return staleValue(fallback.value, error);
+      }
+      throw error;
+    });
+  }
+
+  return loadFresh.catch(async (error) => {
     const fallback = hit || await readEdgeCache(key);
     if (fallback?.value && fallback.staleExpiresAt > Date.now()) {
       return staleValue(fallback.value, error);
