@@ -21,7 +21,8 @@
 - 울산 전체/구·군별 축구장 필터와 운동장명 검색
 - 브라우저 `localStorage` 기반 즐겨찾기
 - 날짜별 예약 가능/예약 완료 시간 묶음 표시
-- 지역, 날짜, 시작 시각, 이용 시간을 기준으로 34곳을 확인해 예약 없는 순으로 추천
+- 울산 안의 장소·주소 검색, 지도 선택 또는 브라우저 현위치를 기준으로 가까운 12곳 추천
+- 추천 요청 시간과 실제 가능한 시간 구간을 `요청 14:00~18:00 · 가능 14:00~16:00`처럼 구분해 표시
 - 각 운동장의 구·군 공식 예약 페이지 연결
 - 기존 `/api/dalcheon/soccer` 주소 호환
 
@@ -97,10 +98,18 @@ GET /api/ulsan/sports?facilityId=ulju:T0000001&date=YYYY-MM-DD
 ### 주변 축구장 추천
 
 ```http
-GET /api/ulsan/soccer/recommendations?area=중구&date=YYYY-MM-DD&start=19:00&hours=2
+GET /api/ulsan/soccer/recommendations?lat=35.5396&lng=129.3114&date=YYYY-MM-DD&start=19:00&hours=2
 ```
 
-선택 지역을 우선한 뒤 울산 전체 축구장을 확인하고, 요청 시간에 모두 비어 있는 곳과 예약된 시간이 적은 곳을 먼저 반환합니다.
+`lat`, `lng` 기준으로 가까운 12곳을 먼저 고른 뒤 요청 시간에 모두 비어 있는 곳, 예약된 시간이 적은 곳, 거리가 가까운 곳 순으로 반환합니다. 각 결과의 `availableWindows`, `bookedWindows`에는 이어진 가능/예약 시간 구간이 담깁니다. 좌표를 생략하면 기존 `area` 기준 추천을 사용합니다.
+
+### 울산 장소 검색
+
+```http
+GET /api/ulsan/location-search?q=태화강역
+```
+
+울산광역시 범위 안에서 최대 6개의 장소·주소 검색 결과와 좌표를 반환합니다. 검색 결과는 OpenStreetMap Nominatim을 사용하며 서버에서 캐시합니다.
 
 ### 기존 달천 전용 주소
 

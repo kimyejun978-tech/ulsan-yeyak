@@ -39,6 +39,62 @@ app.get('/health', async () => ({ ok: true }));
 
 app.get('/api/ulsan/facilities', async () => fetchUlsanFacilities());
 
+app.get('/api/ulsan/location-search', async (req, reply) => {
+  const query = String(req.query?.q || '').trim();
+  if (query.length < 2 || query.length > 80) {
+    return reply.code(400).send({
+      error: 'BadRequest',
+      message: '장소나 주소를 2자 이상 입력해 주세요.'
+    });
+  }
+
+  const cacheKey = `location-search:${query.toLowerCase()}`;
+  const cached = cache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const params = new URLSearchParams({
+    q: `${query}, 울산광역시`,
+    format: 'jsonv2',
+    addressdetails: '1',
+    limit: '6',
+    countrycodes: 'kr',
+    bounded: '1',
+    viewbox: '128.95,35.75,129.50,35.30',
+    'accept-language': 'ko'
+  });
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+    headers: {
+      Accept: 'application/json',
+      'Accept-Language': 'ko-KR,ko;q=0.9',
+      'User-Agent': 'ulsan-soccer-reservation-checker/1.0 (github.com/kimyejun978-tech/ulsan-yeyak)'
+    },
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) {
+    return reply.code(502).send({
+      error: 'LocationSearchUnavailable',
+      message: '장소 검색 서비스가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요.'
+    });
+  }
+  const items = await response.json();
+  const value = {
+    query,
+    results: items.map((item) => {
+      const address = item.address || {};
+      const label = item.name || address.amenity || address.road || address.suburb || String(item.display_name || '').split(',')[0];
+      return {
+        label,
+        detail: item.display_name || label,
+        latitude: Number(item.lat),
+        longitude: Number(item.lon)
+      };
+    }).filter((item) => item.label && Number.isFinite(item.latitude) && Number.isFinite(item.longitude))
+  };
+  cache.set(cacheKey, { expiresAt: now + CACHE_TTL_MS, value });
+  return value;
+});
+
 app.get('/api/ulsan/sports', async (req, reply) => {
   const date = normalizeDate(req.query?.date);
   if (!date) {
@@ -82,7 +138,12 @@ app.get('/api/ulsan/soccer/recommendations', async (req, reply) => {
   const area = String(req.query?.area || '중구');
   const startTime = String(req.query?.start || req.query?.startTime || '19:00');
   const hours = Number(req.query?.hours || 2);
-  const cacheKey = `ulsan-soccer-recommend:${area}:${date}:${startTime}:${hours}`;
+  const latitude = Number(req.query?.lat);
+  const longitude = Number(req.query?.lng);
+  const validLatitude = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 ? latitude : null;
+  const validLongitude = Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 ? longitude : null;
+  const locationKey = validLatitude === null || validLongitude === null ? area : `${validLatitude.toFixed(4)}:${validLongitude.toFixed(4)}`;
+  const cacheKey = `ulsan-soccer-recommend:${locationKey}:${date}:${startTime}:${hours}`;
   const cached = cache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expiresAt > now) return cached.value;
@@ -91,7 +152,9 @@ app.get('/api/ulsan/soccer/recommendations', async (req, reply) => {
     area,
     dateISO: date,
     startTime,
-    hours
+    hours,
+    latitude: validLatitude,
+    longitude: validLongitude
   });
 
   cache.set(cacheKey, { expiresAt: now + CACHE_TTL_MS, value });

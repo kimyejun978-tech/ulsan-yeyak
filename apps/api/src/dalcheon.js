@@ -97,6 +97,24 @@ const FACILITY_DEFINITIONS = [
   ['ulju', 'T0000059', '화랑인조구장', '화랑체육공원', '인조구장', '울주군', 'B0000155']
 ];
 
+const FACILITY_COORDINATES = {
+  '효문운동장': [35.5872986, 129.3731082], '달천운동장': [35.6289982, 129.3222548],
+  '염포운동장': [35.5394205, 129.3975041], '양정생활체육공원': [35.54824, 129.39274],
+  '농소운동장': [35.6205477, 129.3562325], '상안다목적구장': [35.6225792, 129.3374756],
+  '명촌다목적구장': [35.5574482, 129.3567733], '화봉다목적구장': [35.5907462, 129.3642069],
+  '효문다목적구장': [35.57469, 129.37727], '가람다목적구장': [35.5907462, 129.3642069],
+  '중산다목적구장': [35.66216, 129.35455], '송정다목적구장': [35.6019215, 129.3668462],
+  '중구다목적구장': [35.5843409, 129.3328581], '함월구민운동장': [35.5782325, 129.3065687],
+  '십리대밭축구장': [35.5497119, 129.2996875], '선암호수공원': [35.5157131, 129.3243602],
+  '서부시민운동장': [35.54403, 129.42094], '간절곶스포츠파크': [35.3592125, 129.3617851],
+  '구영운동장': [35.58165, 129.25035], '대암체육공원': [35.519, 129.145],
+  '범서생활체육공원': [35.5649476, 129.232909], '삼동면민운동장': [35.5035574, 129.1316649],
+  '상북면민운동장': [35.5911428, 129.0891958], '서생체육공원': [35.3471291, 129.3195815],
+  '온산운동장': [35.4396056, 129.3334831], '온양체육공원': [35.4270149, 129.2806854],
+  '웅촌운동장': [35.4615215, 129.2079772], '작천정운동장': [35.5508432, 129.1023035],
+  '청량운동장': [35.4930662, 129.3061005], '화랑체육공원': [35.6285216, 129.1620225]
+};
+
 const hd = new Holidays('KR');
 let facilityCache = null;
 let facilityCacheExpiresAt = 0;
@@ -111,6 +129,7 @@ function officialSourceUrl(providerKey, itemId, memId) {
 function createFacility(definition) {
   const [provider, itemId, name, place, itemName, area, memId, openHour, closeHour] = definition;
   const providerInfo = PROVIDERS[provider];
+  const coordinates = FACILITY_COORDINATES[place] || FACILITY_COORDINATES[name] || null;
   return {
     id: `${provider}:${itemId}`,
     itemId,
@@ -124,6 +143,8 @@ function createFacility(definition) {
     providerName: providerInfo.label,
     openHour: openHour ?? providerInfo.defaultOpen,
     closeHour: closeHour ?? providerInfo.defaultClose,
+    latitude: coordinates?.[0] ?? null,
+    longitude: coordinates?.[1] ?? null,
     sourceUrl: officialSourceUrl(provider, itemId, memId)
   };
 }
@@ -332,30 +353,61 @@ function areaRank(selectedArea, facilityArea) {
   return index === -1 ? rank.length : index;
 }
 
+function distanceKm(latitude, longitude, facility) {
+  if (latitude === null || longitude === null || !Number.isFinite(facility.latitude) || !Number.isFinite(facility.longitude)) return null;
+  const radians = (value) => value * Math.PI / 180;
+  const dLat = radians(facility.latitude - latitude);
+  const dLng = radians(facility.longitude - longitude);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(latitude)) * Math.cos(radians(facility.latitude)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function groupSlotWindows(slots) {
+  const windows = [];
+  let current = null;
+  for (const slot of slots) {
+    if (!current || current.end !== slot.start) {
+      if (current) windows.push(current);
+      current = { start: slot.start, end: slot.end };
+    } else {
+      current.end = slot.end;
+    }
+  }
+  if (current) windows.push(current);
+  return windows;
+}
+
 function scoreSlots(slots, requestedHours) {
   const requested = slots.filter((slot) => requestedHours.includes(slot.hour));
   const booked = requested.filter((slot) => slot.status === 'BOOKED');
+  const available = requested.filter((slot) => slot.status === 'AVAILABLE');
   return {
     requestedHours,
     requestedSlots: requested.length,
-    availableSlots: requested.length - booked.length,
+    availableSlots: available.length,
     bookedSlots: booked.length,
     isFullyAvailable: requested.length === requestedHours.length && booked.length === 0,
+    availableWindows: groupSlotWindows(available),
+    bookedWindows: groupSlotWindows(booked),
     unavailableSlots: booked.map((slot) => `${slot.start}-${slot.end}`)
   };
 }
 
-export async function recommendSoccerFacilities({ area, dateISO, startTime, hours }) {
+export async function recommendSoccerFacilities({ area, dateISO, startTime, hours, latitude = null, longitude = null }) {
   const selectedArea = normalizeArea(area);
   const duration = normalizeHours(hours);
   const start = normalizeTime(startTime, duration);
   const firstHour = Number(start.slice(0, 2));
   const requestedHours = Array.from({ length: duration }, (_, index) => firstHour + index);
-  const candidates = loadFacilityCatalog().facilities.sort(
-    (a, b) => areaRank(selectedArea, a.area) - areaRank(selectedArea, b.area)
-  ).slice(0, MAX_RECOMMENDATION_CANDIDATES);
+  const hasLocation = latitude !== null && longitude !== null;
+  const candidates = loadFacilityCatalog().facilities
+    .map((facility) => ({ facility, distanceKm: distanceKm(latitude, longitude, facility) }))
+    .sort((a, b) => hasLocation
+      ? (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity)
+      : areaRank(selectedArea, a.facility.area) - areaRank(selectedArea, b.facility.area))
+    .slice(0, MAX_RECOMMENDATION_CANDIDATES);
   const results = await Promise.all(
-    candidates.map(async (facility) => {
+    candidates.map(async ({ facility, distanceKm: facilityDistance }) => {
       try {
         const data = await fetchUlsanFacilitySlots(dateISO, facility.id);
         return {
@@ -364,6 +416,7 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
           startTime: start,
           hours: duration,
           areaRank: areaRank(selectedArea, facility.area),
+          distanceKm: facilityDistance,
           sourceUrl: facility.sourceUrl,
           error: data.error || null,
           ...scoreSlots(data.slots, requestedHours)
@@ -375,6 +428,7 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
           startTime: start,
           hours: duration,
           areaRank: areaRank(selectedArea, facility.area),
+          distanceKm: facilityDistance,
           sourceUrl: facility.sourceUrl,
           error: error.message || '조회 실패',
           requestedHours,
@@ -382,6 +436,8 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
           availableSlots: 0,
           bookedSlots: requestedHours.length,
           isFullyAvailable: false,
+          availableWindows: [],
+          bookedWindows: [],
           unavailableSlots: []
         };
       }
@@ -392,12 +448,14 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
     if (!a.error && b.error) return -1;
     if (a.isFullyAvailable !== b.isFullyAvailable) return a.isFullyAvailable ? -1 : 1;
     if (a.bookedSlots !== b.bookedSlots) return a.bookedSlots - b.bookedSlots;
+    if ((a.distanceKm ?? Infinity) !== (b.distanceKm ?? Infinity)) return (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity);
     if (a.availableSlots !== b.availableSlots) return b.availableSlots - a.availableSlots;
     if (a.areaRank !== b.areaRank) return a.areaRank - b.areaRank;
     return a.facility.name.localeCompare(b.facility.name, 'ko-KR');
   });
   return {
     area: selectedArea,
+    origin: hasLocation ? { latitude, longitude } : null,
     date: dateISO,
     startTime: start,
     hours: duration,
