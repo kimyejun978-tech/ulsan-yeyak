@@ -1,6 +1,10 @@
 const DEFAULT_FACILITY_ID = 'junggu:T0000010';
 const DALCHEON_FACILITY_ID = 'bukgu:T0000037';
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const SLOT_CACHE_TTL_MS = 60 * 1000;
+const SLOT_STALE_TTL_MS = 6 * 60 * 60 * 1000;
+const RECOMMEND_CACHE_TTL_MS = 90 * 1000;
+const RECOMMEND_STALE_TTL_MS = 30 * 60 * 1000;
 const UPSTREAM_TIMEOUT_MS = 3000;
 const MAX_RECOMMENDATION_CANDIDATES = 12;
 const ULSAN_AREAS = ['중구', '남구', '동구', '북구', '울주군'];
@@ -180,7 +184,11 @@ async function route(request) {
     const date = normalizeDate(url.searchParams.get('date'));
     if (!date) return json({ error: 'BadRequest', message: 'date must be YYYY-MM-DD' }, 400);
     const facilityId = url.pathname === '/api/dalcheon/soccer' ? DALCHEON_FACILITY_ID : url.searchParams.get('facilityId');
-    return json(await cached(`slots:${facilityId || DEFAULT_FACILITY_ID}:${date}`, () => fetchFacilitySlots(date, facilityId)), 200, 30);
+    const data = await cached(`slots:${facilityId || DEFAULT_FACILITY_ID}:${date}`, () => fetchFacilitySlots(date, facilityId), {
+      ttlMs: SLOT_CACHE_TTL_MS,
+      staleMs: SLOT_STALE_TTL_MS
+    });
+    return json(data, 200, 30);
   }
   if (url.pathname === '/api/ulsan/soccer/recommendations') {
     const date = normalizeDate(url.searchParams.get('date'));
@@ -191,7 +199,11 @@ async function route(request) {
     const latitude = normalizeCoordinate(url.searchParams.get('lat'), -90, 90);
     const longitude = normalizeCoordinate(url.searchParams.get('lng'), -180, 180);
     const locationKey = latitude === null || longitude === null ? area : `${latitude.toFixed(4)}:${longitude.toFixed(4)}`;
-    return json(await cached(`recommend:${locationKey}:${date}:${startTime}:${hours}`, () => recommendSoccerFacilities({ area, dateISO: date, startTime, hours, latitude, longitude })), 200, 30);
+    const data = await cached(`recommend:${locationKey}:${date}:${startTime}:${hours}`, () => recommendSoccerFacilities({ area, dateISO: date, startTime, hours, latitude, longitude }), {
+      ttlMs: RECOMMEND_CACHE_TTL_MS,
+      staleMs: RECOMMEND_STALE_TTL_MS
+    });
+    return json(data, 200, 30);
   }
   if (url.pathname === '/' || url.pathname === '/index.html') return html(APP_HTML);
   return json({ error: 'NotFound' }, 404);
@@ -769,13 +781,77 @@ async function recommendSoccerFacilities({ area, dateISO, startTime, hours, lati
   };
 }
 
-function cached(key, loader) {
+function edgeCacheRequest(key) {
+  return new Request(`https://ulsan-reservation-cache.local/${encodeURIComponent(key)}`);
+}
+
+async function readEdgeCache(key) {
+  if (!globalThis.caches?.default) return null;
+  try {
+    const response = await caches.default.match(edgeCacheRequest(key));
+    if (!response) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function writeEdgeCache(key, entry) {
+  if (!globalThis.caches?.default || !entry.staleExpiresAt) return;
+  const maxAge = Math.max(1, Math.ceil((entry.staleExpiresAt - Date.now()) / 1000));
+  try {
+    await caches.default.put(edgeCacheRequest(key), new Response(JSON.stringify(entry), {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': `public, max-age=${maxAge}`
+      }
+    }));
+  } catch {
+    // In local tests and some runtimes Cache API may be unavailable.
+  }
+}
+
+function staleValue(value, error) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return {
+    ...value,
+    stale: true,
+    cacheWarning: '공식 예약 서버 응답이 늦어 마지막으로 성공한 조회 결과를 보여줍니다.',
+    staleReason: error?.message || String(error || '')
+  };
+}
+
+async function cached(key, loader, options = {}) {
+  const ttlMs = options.ttlMs || CACHE_TTL_MS;
+  const staleMs = options.staleMs || 0;
   const now = Date.now();
-  const hit = responseCache.get(key);
-  if (hit && hit.expiresAt > now) return Promise.resolve(hit.value);
-  return Promise.resolve(loader()).then((value) => {
-    responseCache.set(key, { expiresAt: now + CACHE_TTL_MS, value });
+  let hit = responseCache.get(key);
+  if (hit && hit.expiresAt > now) return hit.value;
+
+  const edgeHit = await readEdgeCache(key);
+  if (edgeHit?.value) {
+    hit = edgeHit;
+    responseCache.set(key, edgeHit);
+    if (edgeHit.expiresAt > now) return edgeHit.value;
+  }
+
+  return Promise.resolve(loader()).then(async (value) => {
+    const savedAt = Date.now();
+    const entry = {
+      value,
+      savedAt,
+      expiresAt: savedAt + ttlMs,
+      staleExpiresAt: staleMs ? savedAt + staleMs : savedAt + ttlMs
+    };
+    responseCache.set(key, entry);
+    await writeEdgeCache(key, entry);
     return value;
+  }).catch(async (error) => {
+    const fallback = hit || await readEdgeCache(key);
+    if (fallback?.value && fallback.staleExpiresAt > Date.now()) {
+      return staleValue(fallback.value, error);
+    }
+    throw error;
   });
 }
 
@@ -918,14 +994,14 @@ function shortcutDate(button){const date=new Date();if(button.dataset.quick!==un
 function renderDateState(){const selectedDate=$('date').value; const isToday=selectedDate===iso(new Date()); $('dateBadge').textContent=isToday?'오늘 선택됨':''; document.querySelectorAll('[data-quick],[data-weekday]').forEach(button=>{const active=selectedDate===shortcutDate(button);button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active))})}
 function renderTimeline(){if(!currentData)return; $('source').href=currentData.sourceUrl||'https://www.ulsan.go.kr/'; if(currentData.error){$('timeline').innerHTML='<section class="surface badPanel"><div class="sectionTitle">조회 불가</div><p class="sub">'+escapeHtml(currentData.error)+'</p></section>';return} const segments=groupSegments(currentData.slots); const allAvailable=segments.length===1&&segments[0].status==='AVAILABLE'; const name=displayName(currentData.facilityInfo); const track=segments.length?segments.map(segment=>{const open=segment.status==='AVAILABLE'; const title=allAvailable?'예약 없음':ampm(segment.start)+' ~ '+ampm(segment.end); const detail=allAvailable?ampm(segment.start)+' ~ '+ampm(segment.end)+' · '+segment.hours+'시간 전체 가능':segment.hours+'시간 '+(open?'가능':'예약'); return '<div class="timeSegment '+(open?'available':'booked')+(segments.length===1?' only':'')+'" style="--hours:'+segment.hours+'"><b>'+title+'</b><span class="meta">'+detail+'</span></div>'}).join(''):'<div class="empty">표시할 운영 시간이 없습니다</div>'; $('timeline').innerHTML='<section class="surface"><div class="summary"><div class="stat"><span>선택 운동장</span><b>'+escapeHtml(name)+'</b><span>'+escapeHtml(currentData.date)+'</span></div></div></section><section class="surface"><div class="sectionHead"><div><div class="sectionTitle">시간대별 예약 현황</div><div class="timelineLegend"><span class="legendItem"><i class="legendDot available"></i>예약 가능</span><span class="legendItem"><i class="legendDot booked"></i>예약됨</span></div></div></div><div class="availabilityTrack">'+track+'</div></section>'}
 async function loadFacilities(){try{const j=await fetchJson('/api/ulsan/facilities',60*60*1000); facilities=j.facilities||[]; const preferred=favorites.find(id=>facilities.some(f=>f.id===id)); if(!facilities.some(f=>f.id===selected))selected=preferred||(facilities[0]&&facilities[0].id)||selected; renderFacilities(); renderFacilityMarkers()}catch(e){setMessage('error',e.message); facilities=[]; renderFacilities()}}
-async function loadSlots(force=false){const requestId=++slotsRequestId; renderDateState(); const qs=new URLSearchParams({date:$('date').value,facilityId:selected}); const url='/api/ulsan/sports?'+qs; try{if(force||!memoryCache.has(url))setMessage('wait','예약 정보를 불러오는 중입니다.'); const data=await fetchJson(url,30000,force); if(requestId!==slotsRequestId)return; currentData=data; setMessage('',''); renderFacilities(); renderTimeline()}catch(e){if(requestId===slotsRequestId)setMessage('error',e.message)}}
+async function loadSlots(force=false){const requestId=++slotsRequestId; renderDateState(); const qs=new URLSearchParams({date:$('date').value,facilityId:selected}); const url='/api/ulsan/sports?'+qs; try{if(force||!memoryCache.has(url))setMessage('wait','예약 정보를 불러오는 중입니다.'); const data=await fetchJson(url,30000,force); if(requestId!==slotsRequestId)return; currentData=data; setMessage(data.stale?'wait':'',data.cacheWarning||''); renderFacilities(); renderTimeline()}catch(e){if(requestId===slotsRequestId)setMessage('error',e.message)}}
 function updateStartOptions(){const h=Number($('hours').value||2); const max=24-h; $('start').innerHTML=''; for(let i=5;i<=max;i++){const t=String(i).padStart(2,'0')+':00'; const o=document.createElement('option'); o.value=t; o.textContent=ampm(t); $('start').appendChild(o)} if(!$('start').value)$('start').value='19:00'}
 function requestWindow(start,hours){const end=String(Number(start.slice(0,2))+Number(hours)).padStart(2,'0')+':00';return start+'~'+end}
 function windowList(windows){return (windows||[]).map(window=>window.start+'~'+window.end).join(', ')}
 function resultLabel(r){if(r.error)return '조회 실패';if(r.isFullyAvailable)return '전체 가능';if(!r.availableSlots)return '예약 불가';return '일부 가능'}
 function availabilityDetail(r,start,hours){if(r.error)return '예약 현황을 확인하지 못했어요';if(r.isFullyAvailable)return '가능 '+requestWindow(start,hours);const available=windowList(r.availableWindows);return available?'가능 '+available:'가능 시간 없음'}
 function useCurrentLocation(){const button=$('useLocation');if(!navigator.geolocation){$('locationStatus').textContent='이 브라우저에서는 현위치를 사용할 수 없어요.';return}button.disabled=true;button.textContent='위치 확인 중';navigator.geolocation.getCurrentPosition(position=>{setRecommendationOrigin(position.coords.latitude,position.coords.longitude,'내 현위치',14);button.disabled=false;button.textContent='현위치 다시 찾기'},()=>{$('locationStatus').textContent='위치 권한을 허용하거나 지도에서 위치를 선택해 주세요.';button.disabled=false;button.textContent='현위치 사용'},{enableHighAccuracy:true,timeout:10000,maximumAge:60000})}
-async function loadRecommendations(){const button=$('recommendBtn'); const original=button.textContent; button.disabled=true; button.textContent='조회 중'; try{const qs=new URLSearchParams({area:'중구',lat:String(recommendationOrigin.latitude),lng:String(recommendationOrigin.longitude),date:$('recDate').value,start:$('start').value,hours:$('hours').value}); const url='/api/ulsan/soccer/recommendations?'+qs; if(!memoryCache.has(url))$('recommendations').innerHTML='<div class="message wait">선택 위치에서 가까운 축구장 12곳의 예약 현황을 확인합니다.</div>'; const j=await fetchJson(url,60000); const items=(j.results||[]).slice(0,12); renderRecommendationMarkers(items); const requested=requestWindow(j.startTime,j.hours); $('recommendations').innerHTML='<p class="sub">'+escapeHtml(recommendationOrigin.label)+' 기준 · 요청 '+requested+' · 가까운 '+j.facilitiesChecked+'곳 확인</p><div class="recList">'+items.map((x,index)=>{const distance=distanceLabel(x.distanceKm);const status=resultLabel(x);const tone=x.isFullyAvailable?'good':(!x.availableSlots||x.error?'bad':'');return '<article class="rec '+(x.isFullyAvailable?'best':'')+'" data-pick="'+escapeHtml(x.facility.id)+'" role="button" tabindex="0" aria-label="'+escapeHtml(displayName(x.facility))+' 상세보기"><button class="tool favorite '+(favorites.includes(x.facility.id)?'active':'')+'" data-star="'+escapeHtml(x.facility.id)+'" aria-label="즐겨찾기 '+escapeHtml(displayName(x.facility))+'">'+(favorites.includes(x.facility.id)?'★':'☆')+'</button><div class="recMain"><b>'+(index+1)+'. '+escapeHtml(displayName(x.facility))+'</b><span class="meta">'+(distance?'<span class="distance">'+distance+'</span> · ':'')+escapeHtml(detailName(x.facility))+'</span><span class="availabilityText">요청 '+requested+' · '+escapeHtml(availabilityDetail(x,j.startTime,j.hours))+'</span></div><span class="pill '+tone+'">'+status+'</span></article>'}).join('')+'</div>'}catch(e){$('recommendations').innerHTML='<div class="message error">'+escapeHtml(e.message)+'</div>'}finally{button.disabled=false;button.textContent=original}}
+async function loadRecommendations(){const button=$('recommendBtn'); const original=button.textContent; button.disabled=true; button.textContent='조회 중'; try{const qs=new URLSearchParams({area:'중구',lat:String(recommendationOrigin.latitude),lng:String(recommendationOrigin.longitude),date:$('recDate').value,start:$('start').value,hours:$('hours').value}); const url='/api/ulsan/soccer/recommendations?'+qs; if(!memoryCache.has(url))$('recommendations').innerHTML='<div class="message wait">선택 위치에서 가까운 축구장 12곳의 예약 현황을 확인합니다.</div>'; const j=await fetchJson(url,60000); const items=(j.results||[]).slice(0,12); renderRecommendationMarkers(items); const requested=requestWindow(j.startTime,j.hours); const warning=j.stale?'<div class="message wait">'+escapeHtml(j.cacheWarning||'마지막 성공 조회 결과를 보여줍니다.')+'</div>':''; $('recommendations').innerHTML=warning+'<p class="sub">'+escapeHtml(recommendationOrigin.label)+' 기준 · 요청 '+requested+' · 가까운 '+j.facilitiesChecked+'곳 확인</p><div class="recList">'+items.map((x,index)=>{const distance=distanceLabel(x.distanceKm);const status=resultLabel(x);const tone=x.isFullyAvailable?'good':(!x.availableSlots||x.error?'bad':'');return '<article class="rec '+(x.isFullyAvailable?'best':'')+'" data-pick="'+escapeHtml(x.facility.id)+'" role="button" tabindex="0" aria-label="'+escapeHtml(displayName(x.facility))+' 상세보기"><button class="tool favorite '+(favorites.includes(x.facility.id)?'active':'')+'" data-star="'+escapeHtml(x.facility.id)+'" aria-label="즐겨찾기 '+escapeHtml(displayName(x.facility))+'">'+(favorites.includes(x.facility.id)?'★':'☆')+'</button><div class="recMain"><b>'+(index+1)+'. '+escapeHtml(displayName(x.facility))+'</b><span class="meta">'+(distance?'<span class="distance">'+distance+'</span> · ':'')+escapeHtml(detailName(x.facility))+'</span><span class="availabilityText">요청 '+requested+' · '+escapeHtml(availabilityDetail(x,j.startTime,j.hours))+'</span></div><span class="pill '+tone+'">'+status+'</span></article>'}).join('')+'</div>'}catch(e){$('recommendations').innerHTML='<div class="message error">'+escapeHtml(e.message)+'</div>'}finally{button.disabled=false;button.textContent=original}}
 async function openRecommendation(id){if(!id)return; selected=id; $('facilityArea').value='전체'; $('facilitySearch').value=''; $('date').value=$('recDate').value; renderFacilities(); await loadSlots(); $('timeline').scrollIntoView({behavior:'smooth',block:'start'})}
 $('date').value=iso(new Date()); $('recDate').value=$('date').value; ['전체',...AREAS].forEach(a=>{$('facilityArea').append(new Option(a,a))}); updateStartOptions(); $('start').value='19:00'; renderDateState(); initializeRecommendationMap();
 $('facilitySearch').oninput=renderFacilities; $('facilityArea').onchange=()=>{const area=$('facilityArea').value; const current=facilities.find(f=>f.id===selected); if(area!=='전체'&&current?.area!==area){const first=facilities.find(f=>f.area===area); if(first){selected=first.id; loadSlots(); return}} renderFacilities()}; $('facilityList').onclick=(e)=>{const star=e.target.closest('[data-toggle-fav]'); if(star){toggleFavorite(star.dataset.toggleFav);return} const btn=e.target.closest('[data-facility]'); if(btn){selected=btn.dataset.facility; $('facilitySearch').value=''; loadSlots()}};
