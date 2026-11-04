@@ -1,0 +1,38 @@
+name: Browser regression QA
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/checkout@v4
+        with:
+          repository: kimyejun978-tech/dalcheon-reservation-checker
+          ref: 11abda2f521ee5173925fc844f17b95e45c11b5f
+          path: .qa-dalcheon
+      - name: Install isolated browser test tools
+        run: npm install --prefix .qa-browser --no-audit --no-fund --package-lock=false @playwright/test@1.58.2 leaflet@1.9.4
+      - name: Install Chromium
+        run: node .qa-browser/node_modules/@playwright/test/cli.js install --with-deps chromium
+      - name: Install and build the Dalcheon web app
+        working-directory: .qa-dalcheon
+        run: npm ci --ignore-scripts --no-audit --no-fund && npm run build
+      - name: Run reservation and browser tests
+        run: npm test && node .qa-browser/node_modules/@playwright/test/cli.js test --config tests/playwright.config.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reservation-browser-evidence
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

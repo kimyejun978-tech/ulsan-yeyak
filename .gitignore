@@ -5,3 +5,9 @@ apps/**/dist/
 .DS_Store
 .env
 package-lock.json
+
+
+.qa-browser/
+.qa-dalcheon/
+test-results/
+playwright-report/
