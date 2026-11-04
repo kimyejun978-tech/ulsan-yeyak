@@ -2,9 +2,9 @@ import {test,expect} from '../.qa-browser/node_modules/@playwright/test/index.mj
 import fs from 'node:fs/promises';
 const base='http://127.0.0.1:8787';
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jSTkAAAAASUVORK5CYII=','base64');
-async function setup(page,request){
+async function setup(page,request,origin=base){
   await page.clock.setFixedTime(new Date('2026-11-04T03:00:00Z'));
-  const catalog=await(await request.get(base+'/api/ulsan/facilities')).json();
+  const catalog=await(await request.get(origin+'/api/ulsan/facilities')).json();
   const facilities=catalog.facilities;
   await page.route('https://unpkg.com/leaflet@1.9.4/dist/**',async route=>{
     const filename=route.request().url().endsWith('.css')?'leaflet.css':'leaflet.js';
@@ -23,7 +23,7 @@ async function setup(page,request){
     const url=new URL(route.request().url());
     return route.fulfill({json:{date:url.searchParams.get('date'),startTime:url.searchParams.get('start'),hours:Number(url.searchParams.get('hours')),facilitiesChecked:3,stale:true,cacheWarning:'일부 운동장은 이전 조회 정보입니다.',results:facilities.slice(0,3).map((f,index)=>({facility:f,sourceUrl:f.sourceUrl,isFullyAvailable:index===0,availableSlots:index===0?3:1,bookedSlots:index===0?0:2,requestedSlots:3,availableWindows:[{start:'19:00',end:index===0?'22:00':'20:00'}],error:null,stale:index===0,updatedAt:'2026-11-04T01:00:00Z',distanceKm:1+index}))}});
   });
-  await page.goto(base);
+  await page.goto(origin);
   await expect(page.locator('#timeline')).toContainText('시간대별 예약 현황');
 }
 
@@ -91,4 +91,31 @@ test('Dalcheon web app does not report availability after a failed lookup',async
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.locator('main')).not.toContainText('예약 없음');
   await page.screenshot({path:testInfo.outputPath('dalcheon-error.png'),fullPage:true});
+});
+
+test('deployed Dalcheon release and public UI contain the maintenance fixes',async({page,request},testInfo)=>{
+  const url='https://dalcheon-reservation-checker.pages.dev';
+  const health=await request.get(url+'/health');
+  expect(health.ok()).toBe(true);
+  expect((await health.json()).release).toBe('2026-11-04-maintenance');
+  expect((await request.get(url+'/api/dalcheon/soccer?date=2026-02-31')).status()).toBe(400);
+  await page.clock.setFixedTime(new Date('2026-11-04T03:00:00Z'));
+  await page.route('**/api/dalcheon/soccer?*',route=>route.fulfill({status:503,json:{message:'Test failure'}}));
+  await page.goto(url);
+  await expect(page.getByRole('heading',{level:1})).toHaveText('달천운동장 예약 확인');
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.locator('main')).not.toContainText('예약 없음');
+  await page.screenshot({path:testInfo.outputPath('dalcheon-live-390.png'),fullPage:true});
+});
+
+test('deployed Ulsan Worker exposes the new release and corrected mobile controls',async({page,request},testInfo)=>{
+  const url='https://ulsan-soccer-reservation-checker.kimyejun978.workers.dev';
+  const health=await request.get(url+'/health');
+  expect(health.ok()).toBe(true);
+  expect((await health.json()).release).toBe('2026-11-04-maintenance');
+  expect((await request.get(url+'/api/ulsan/sports?date=2026-02-31')).status()).toBe(400);
+  await setup(page,request,url);
+  await page.locator('#hours').selectOption('3');
+  await expect(page.locator('#start')).toHaveValue('19:00');
+  await page.screenshot({path:testInfo.outputPath('ulsan-live-390.png'),fullPage:true});
 });

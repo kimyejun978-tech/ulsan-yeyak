@@ -2,6 +2,14 @@ name: Browser regression QA
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/browser-qa.yml'
+      - 'tests/**'
+      - 'apps/web/**'
+      - 'cloudflare-worker.js'
+      - 'deploy-server.mjs'
+      - 'package.json'
+      - 'Dockerfile'
   workflow_dispatch:
 permissions:
   contents: read
