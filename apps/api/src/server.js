@@ -206,17 +206,14 @@ try {
 
 function normalizeDate(dateParam) {
   if (dateParam == null || dateParam === '') {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+    return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   }
   const s = String(dateParam);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const d = new Date(s + 'T00:00:00');
-  if (Number.isNaN(d.getTime())) return null;
-  return s;
+  const [year, month, day] = s.split('-').map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return year >= 1000 && d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? s : null;
 }
 
 app.listen({ port: PORT, host: HOST });
+

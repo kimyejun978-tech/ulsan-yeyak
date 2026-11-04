@@ -199,7 +199,7 @@ function requestText(urlInput, { body, referer } = {}) {
         path: `${url.pathname}${url.search}`,
         method: body ? 'POST' : 'GET',
         headers,
-        rejectUnauthorized: process.env.ULSAN_REJECT_UNAUTHORIZED === '1'
+        rejectUnauthorized: true
       },
       (res) => {
         let data = '';
@@ -312,6 +312,7 @@ export async function fetchUlsanFacilitySlots(dateISO, facilityId = DEFAULT_FACI
   const bookedHours = new Set(
     String(raw.hhhlist || '')
       .split(',')
+      .filter((value) => value.trim() !== '')
       .map((value) => Number(value.trim()))
       .filter(Number.isFinite)
   );
@@ -383,7 +384,8 @@ function scoreSlots(slots, requestedHours) {
   const available = requested.filter((slot) => slot.status === 'AVAILABLE');
   return {
     requestedHours,
-    requestedSlots: requested.length,
+    requestedSlots: requestedHours.length,
+    closedSlots: requestedHours.length - requested.length,
     availableSlots: available.length,
     bookedSlots: booked.length,
     isFullyAvailable: requested.length === requestedHours.length && booked.length === 0,
@@ -447,7 +449,7 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
     if (a.error && !b.error) return 1;
     if (!a.error && b.error) return -1;
     if (a.isFullyAvailable !== b.isFullyAvailable) return a.isFullyAvailable ? -1 : 1;
-    if (a.bookedSlots !== b.bookedSlots) return a.bookedSlots - b.bookedSlots;
+    if (a.availableSlots !== b.availableSlots) return b.availableSlots - a.availableSlots;
     if ((a.distanceKm ?? Infinity) !== (b.distanceKm ?? Infinity)) return (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity);
     if (a.availableSlots !== b.availableSlots) return b.availableSlots - a.availableSlots;
     if (a.areaRank !== b.areaRank) return a.areaRank - b.areaRank;
@@ -469,3 +471,4 @@ export async function recommendSoccerFacilities({ area, dateISO, startTime, hour
 export async function fetchDalcheonSoccerSlots(dateISO) {
   return fetchUlsanFacilitySlots(dateISO, DALCHEON_FACILITY_ID);
 }
+

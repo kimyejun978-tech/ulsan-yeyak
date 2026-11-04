@@ -12,6 +12,7 @@
     "start": "node deploy-server.mjs",
     "start:workspace": "npm run build -w @ulsan/web && npm run start -w @ulsan/api",
     "lint": "npm run lint -ws",
-    "format": "npm run format -ws"
+    "format": "npm run format -ws",
+    "test": "node --test tests/*.test.mjs"
   }
 }

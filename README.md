@@ -124,4 +124,13 @@ GET /api/dalcheon/soccer?date=YYYY-MM-DD
 - `CACHE_TTL_MS` 기본값 `300000`
 - `FACILITY_CACHE_TTL_MS` 기본값 `21600000`
 - `CORS=1`: Vite와 API를 별도로 실행할 때 사용
-- `ULSAN_REJECT_UNAUTHORIZED=1`: Node 대체 서버에서 공식 사이트 TLS 인증서를 엄격하게 검사
+- Node 서버의 TLS 인증서 검증은 기본으로 활성화됩니다. 별도 신뢰 인증서가 필요한 환경에서는 검증을 끄지 말고 `NODE_EXTRA_CA_CERTS`로 관리합니다.
+
+## 유지보수 검증
+
+`npm test`로 외부 의존성 없이 예약 파싱, 날짜 검증, 캐시 갱신, 오래된 정보 경고, 추천 순위와 Node/Worker 호환을 검사합니다.
+`deploy-server.mjs`는 Worker와 같은 화면/API를 사용하므로 `npm start`와 Cloudflare 배포의 기능이 일치합니다.
+
+일반 예약 조회와 추천의 하위 조회는 동일한 60초 캐시를 사용합니다. 화면의 새로고침은 `refresh=1`로 최신 조회를 요청합니다.
+공식 서버 응답 지연으로 이전 결과를 보여줄 때는 추천 전체와 개별 구장에 경고와 원본 확인 시각을 표시합니다.
+

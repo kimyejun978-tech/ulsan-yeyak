@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const DEFAULT_FACILITY_ID = 'junggu:T0000010'
@@ -9,12 +9,12 @@ const TIME_OPTIONS = Array.from({ length: 19 }, (_, index) => `${String(index + 
 const responseCache = new Map()
 const pendingRequests = new Map()
 
-async function fetchJson(url, ttl = 30000) {
+async function fetchJson(url, ttl = 30000, force = false) {
   const cached = responseCache.get(url)
-  if (cached && Date.now() - cached.savedAt < ttl) return cached.data
-  if (pendingRequests.has(url)) return pendingRequests.get(url)
+  if (!force && cached && Date.now() - cached.savedAt < ttl) return cached.data
+  if (!force && pendingRequests.has(url)) return pendingRequests.get(url)
 
-  const request = fetch(url)
+  const request = fetch(url, { cache: force ? 'no-store' : 'default' })
     .then(async (response) => {
       const data = await response.json()
       if (!response.ok) throw new Error(data?.message || `API error: ${response.status}`)
@@ -47,7 +47,7 @@ function readFavorites() {
 }
 
 function saveFavorites(ids) {
-  window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids))
+  try { window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids)) } catch { /* Keep favorites usable in this session when storage is unavailable. */ }
 }
 
 function formatKoreanAmPm(hhmm) {
@@ -55,6 +55,7 @@ function formatKoreanAmPm(hhmm) {
   const hh = Number(hhStr)
   if (!Number.isFinite(hh) || mm == null) return hhmm
 
+  if (hh === 24) return `다음 날 오전 12:${mm}`
   const isPM = hh >= 12
   const period = isPM ? '오후' : '오전'
   let h12 = hh % 12
@@ -95,7 +96,7 @@ function facilityLabel(facility) {
 function resultLabel(result) {
   if (result.error) return '조회 실패'
   if (result.isFullyAvailable) return '예약 없음'
-  if (result.bookedSlots === result.requestedSlots) return '전부 예약'
+  if (!result.availableSlots) return '예약 불가'
   return `${result.availableSlots}/${result.requestedSlots}시간 가능`
 }
 
@@ -131,6 +132,8 @@ export default function App() {
   const [facilities, setFacilities] = useState([])
   const [favorites, setFavorites] = useState(readFavorites)
   const [data, setData] = useState(null)
+  const loadRequestId = useRef(0)
+  const recommendRequestId = useRef(0)
   const [error, setError] = useState(null)
   const [facilityError, setFacilityError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -169,23 +172,35 @@ export default function App() {
     }
   }
 
-  async function load() {
+  async function load(force = false) {
+    const requestId = ++loadRequestId.current
+    setData(null)
+    if (!date) {
+      setLoading(false)
+      setError('조회 날짜를 선택해 주세요.')
+      return
+    }
     setLoading(true)
     setError(null)
     try {
       const base = import.meta.env.VITE_API_BASE || ''
       const params = new URLSearchParams({ date, facilityId })
-      const json = await fetchJson(`${base}/api/ulsan/sports?${params.toString()}`, 30000)
-      setData(json)
-    } catch (e) {
-      setError(String(e?.message || e))
-      setData(null)
+      if (force) params.set('refresh', '1')
+      const json = await fetchJson(`${base}/api/ulsan/sports?${params.toString()}`, 30000, force)
+      if (requestId === loadRequestId.current) setData(json)
+    } catch {
+      if (requestId === loadRequestId.current) {
+        setError('예약 정보를 확인하지 못했어요. 새로고침하거나 공식 예약 사이트에서 확인해 주세요.')
+        setData(null)
+      }
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestId.current) setLoading(false)
     }
   }
 
   async function loadRecommendations() {
+    const requestId = ++recommendRequestId.current
+    if (!recommendDate) { setRecommendError('추천 날짜를 선택해 주세요.'); return }
     setRecommendLoading(true)
     setRecommendError(null)
     try {
@@ -197,12 +212,14 @@ export default function App() {
         hours: String(recommendHours)
       })
       const json = await fetchJson(`${base}/api/ulsan/soccer/recommendations?${params.toString()}`, 60000)
-      setRecommendations(json)
+      if (requestId === recommendRequestId.current) setRecommendations(json)
     } catch (e) {
-      setRecommendError(String(e?.message || e))
-      setRecommendations(null)
+      if (requestId === recommendRequestId.current) {
+        setRecommendError(String(e?.message || e))
+        setRecommendations(null)
+      }
     } finally {
-      setRecommendLoading(false)
+      if (requestId === recommendRequestId.current) setRecommendLoading(false)
     }
   }
 
@@ -219,8 +236,16 @@ export default function App() {
 
   useEffect(() => {
     load()
+    return () => { loadRequestId.current += 1 }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, facilityId])
+
+  useEffect(() => {
+    recommendRequestId.current += 1
+    setRecommendations(null)
+    setRecommendError(null)
+    setRecommendLoading(false)
+  }, [recommendArea, recommendDate, recommendStart, recommendHours])
 
   const selectedFacility = useMemo(() => {
     return facilities.find((facility) => facility.id === facilityId) || data?.facilityInfo || facilities[0]
@@ -296,10 +321,10 @@ export default function App() {
 
       <header className="header">
         <div>
-          <div className="title">울산 축구장 예약 확인</div>
+          <h1 className="title">울산 축구장 예약 확인</h1>
           <div className="subtitle">{facilityLabel(selectedFacility)}</div>
         </div>
-        <button className="btn" onClick={load} disabled={loading}>
+        <button className="btn" onClick={() => load(true)} disabled={loading}>
           새로고침
         </button>
       </header>
@@ -347,12 +372,13 @@ export default function App() {
                 d.setDate(d.getDate() - 1)
                 setDate(toISODate(d))
               }}
+              disabled={!date}
               aria-label="이전 날짜"
               title="이전 날짜"
             >
               ← 이전
             </button>
-            <input className="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <input className="date" type="date" aria-label="조회 날짜" value={date} onChange={(e) => setDate(e.target.value)} />
             <button
               className="navBtn"
               onClick={() => {
@@ -360,6 +386,7 @@ export default function App() {
                 d.setDate(d.getDate() + 1)
                 setDate(toISODate(d))
               }}
+              disabled={!date}
               aria-label="다음 날짜"
               title="다음 날짜"
             >
@@ -380,7 +407,7 @@ export default function App() {
                   key={q.label}
                   className={isActive ? 'chip active' : 'chip'}
                   onClick={() => {
-                    if (q.value === date) load()
+                    if (q.value === date) load(true)
                     else setDate(q.value)
                   }}
                 >
@@ -402,10 +429,11 @@ export default function App() {
         </div>
 
         {facilityError && <div className="notice">축구장 목록은 기본값으로 표시 중입니다.</div>}
-        {error && <div className="error">{error}</div>}
+        {error && <div className="error" role="alert">{error}</div>}
       </section>
 
-      <main className="timeline" aria-label="time slots">
+      <main className="timeline" aria-label="예약 시간표" aria-busy={loading}>
+        {!loading && !error && data && !data.error && !data.slots?.length && <div className="empty">표시할 운영 시간이 없습니다. 공식 예약 사이트에서 확인해 주세요.</div>}
         {data?.holiday?.isHoliday && (
           <div className="hero danger">
             <div className="heroTitle">
@@ -413,8 +441,8 @@ export default function App() {
             </div>
             <div className="heroSub">
               {data.holiday.type === 'substitute' && data.holiday.of
-                ? `(${data.holiday.of} 대체휴일) 예약 불가`
-                : '공휴일에는 예약이 불가합니다.'}
+                ? `(${data.holiday.of} 대체휴일) 운영 여부는 공식 사이트에서 확인해 주세요.`
+                : '공휴일 운영 여부와 이용 조건은 공식 예약 사이트에서 확인해 주세요.'}
             </div>
           </div>
         )}
@@ -427,7 +455,7 @@ export default function App() {
           </div>
         )}
 
-        {!data?.error && !data?.holiday?.isHoliday && (
+        {data && !loading && !error && !data.error && data.slots?.length > 0 && (
           <>
             <section className="blocks ok">
               <div className="blocksTitle">가능한 시간</div>
@@ -452,7 +480,7 @@ export default function App() {
                   blocks={bookedBlocks}
                   tone="danger"
                   emptyTitle="예약 없음"
-                  emptySub="표시된 운영 시간은 모두 사용 가능"
+                  emptySub={data.slots?.length ? '표시된 운영 시간에는 예약이 없습니다.' : '운영 시간 정보를 확인할 수 없습니다.'}
                   metaLabel="예약"
                 />
               )}
@@ -523,6 +551,7 @@ export default function App() {
         </div>
 
         {recommendError && <div className="error">{recommendError}</div>}
+        {recommendations?.stale && <div className="notice" role="status">{recommendations.cacheWarning || '이전 조회 결과입니다. 예약 전 공식 사이트에서 다시 확인해 주세요.'}</div>}
 
         {recommendations?.results?.length ? (
           <div className="recommendList">
@@ -576,3 +605,4 @@ export default function App() {
     </div>
   )
 }
+
